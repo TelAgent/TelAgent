@@ -12,7 +12,7 @@ import datetime
 load_dotenv()
 
 # ============================================
-# 1. إنشاء تطبيق FastAPI مع OpenAPI متوافق
+# 1. إنشاء تطبيق FastAPI
 # ============================================
 
 app = FastAPI(
@@ -22,26 +22,18 @@ app = FastAPI(
         "name": "TelAgent",
         "email": "legal@telagent.dev",
         "url": "https://telagent.dev"
-    },
-    openapi_tags=[
-        {"name": "payment", "description": "Paid x402 endpoints"},
-        {"name": "free", "description": "Free public endpoints"}
-    ],
-    swagger_ui_parameters={
-        "defaultModelsExpandDepth": -1,
-        "docExpansion": "none"
     }
 )
 
 # ============================================
-# 2. تخصيص OpenAPI لإضافة x402 security
+# 2. تخصيص OpenAPI
 # ============================================
 
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     
-    openapi_schema = app.openapi_schema = {
+    openapi_schema = {
         "openapi": "3.1.0",
         "info": {
             "title": "TelAgent",
