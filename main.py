@@ -52,7 +52,68 @@ def check_agent_consent(wallet: str) -> bool:
     return agent_consents.get(wallet, {}).get("consent", False)
 
 # ============================================
-# 5. دعم OPTIONS و GET للكشف من agentcash
+# 5. نقطة كشف x402 مخصصة (لـ agentcash)
+# ============================================
+
+@app.options("/x402/discover")
+async def options_x402_discover():
+    """استجابة OPTIONS لنقطة الكشف"""
+    return Response(
+        headers={
+            "Allow": "GET, OPTIONS",
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "solana",
+                        "maxAmountRequired": 10000,
+                        "asset": "USDC",
+                        "description": "Pay 0.01 USDC for one Telegram message"
+                    }
+                ],
+                "resource": "/api/v1/telegram/send",
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2"
+        }
+    )
+
+@app.get("/x402/discover")
+async def x402_discover():
+    """نقطة نهاية مخصصة للكشف عن x402"""
+    return JSONResponse(
+        status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "solana",
+                        "maxAmountRequired": 10000,
+                        "asset": "USDC",
+                        "description": "Pay 0.01 USDC for one Telegram message"
+                    }
+                ],
+                "resource": "/api/v1/telegram/send",
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2"
+        },
+        content={
+            "error": "Payment Required",
+            "message": "Please pay 0.01 USDC to send this message",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana",
+            "resource": "/api/v1/telegram/send"
+        }
+    )
+
+# ============================================
+# 6. دعم OPTIONS و GET للكشف من agentcash (للتوافق العكسي)
 # ============================================
 
 @app.options("/api/v1/telegram/send")
@@ -113,7 +174,7 @@ async def get_telegram_send():
     )
 
 # ============================================
-# 6. نقطة نهاية إرسال الرسالة (POST مع x402)
+# 7. نقطة نهاية إرسال الرسالة (POST مع x402)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -195,7 +256,7 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         }
 
 # ============================================
-# 7. تسجيل العميل
+# 8. تسجيل العميل
 # ============================================
 
 @app.post("/api/agent/register")
@@ -224,7 +285,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 8. ملف Discovery (JSON)
+# 9. ملف Discovery (JSON)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -256,13 +317,14 @@ async def discovery():
                     "price_unit": "per message"
                 }
             ],
-            "x402_required": True
+            "x402_required": True,
+            "discovery_endpoint": "/x402/discover"
         },
         media_type="application/json"
     )
 
 # ============================================
-# 9. شعارات SVG
+# 10. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -287,7 +349,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 10. الصفحة الرئيسية (HTML)
+# 11. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -425,7 +487,7 @@ async def root():
     """)
 
 # ============================================
-# 11. صفحة شروط الخدمة (Terms)
+# 12. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -469,7 +531,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 12. صفحة سياسة الخصوصية المختصرة
+# 13. صفحة سياسة الخصوصية المختصرة
 # ============================================
 
 @app.get("/privacy-short")
@@ -515,7 +577,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 13. تشغيل الخادم
+# 14. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
