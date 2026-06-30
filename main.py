@@ -41,7 +41,7 @@ def x402_response():
             {
                 "scheme": "exact",
                 "network": "solana",
-                "maxAmountRequired": 10000,  # 0.01 USDC (6 decimals)
+                "maxAmountRequired": 10000,
                 "asset": "USDC",
                 "description": "Pay 0.01 USDC for one Telegram message"
             }
@@ -68,29 +68,35 @@ def x402_response():
     )
 
 # ============================================
-# 4. Middleware للكشف عن x402
+# 4. Middleware (معدل - لا يعترض Discovery)
 # ============================================
 
 @app.middleware("http")
 async def x402_middleware(request: Request, call_next):
-    """اعتراض جميع الطلبات والرد بـ 402 إذا كان الطلب للكشف"""
+    """اعتراض الطلبات فقط لنقطة النهاية المدفوعة"""
     
-    # قائمة المسارات المستثناة (تعمل بشكل طبيعي)
-    excluded_paths = ["/", "/terms", "/privacy-short", "/.well-known/x402"]
+    # المسارات المستثناة تماماً (تعمل بشكل طبيعي)
+    excluded_paths = [
+        "/",
+        "/terms",
+        "/privacy-short",
+        "/.well-known/x402",
+        "/docs",
+        "/openapi.json"
+    ]
     
-    # إذا كان المسار من excluded_paths، استمر كالمعتاد
+    # إذا كان المسار مستثنى، استمر كالمعتاد
     if request.url.path in excluded_paths:
         return await call_next(request)
     
-    # إذا كان الطلب من agentcash أو يطلب x402
-    user_agent = request.headers.get("user-agent", "").lower()
-    accept = request.headers.get("accept", "")
+    # المسارات المحمية (تتطلب دفع x402)
+    protected_paths = ["/api/v1/telegram/send"]
     
-    # إذا كان الطلب للكشف عن x402 (GET أو OPTIONS)
-    if request.method in ["GET", "OPTIONS"]:
+    # إذا كان المسار محمياً والطريقة GET أو OPTIONS -> طلب دفع
+    if request.url.path in protected_paths and request.method in ["GET", "OPTIONS"]:
         return x402_response()
     
-    # للطلبات العادية (POST, PUT, إلخ)
+    # للطلبات العادية (POST, PUT, إلخ) أو المسارات الأخرى
     response = await call_next(request)
     return response
 
@@ -198,7 +204,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 9. ملف Discovery (JSON)
+# 9. ملف Discovery (JSON) - متوافق مع x402
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -215,15 +221,12 @@ async def discovery():
             },
             "servers": [
                 {
-                    "url": "https://telagent.onrender.com/api/v1",
-                    "price_schema": "x402",
-                    "currency": "USDC",
-                    "chain": "solana"
+                    "url": "https://telagent.onrender.com"
                 }
             ],
             "resources": [
                 {
-                    "path": "/telegram/send",
+                    "path": "/api/v1/telegram/send",
                     "method": "POST",
                     "description": "Send a Telegram message",
                     "price": "0.01",
