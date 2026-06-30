@@ -30,7 +30,73 @@ if not PAYMENT_RECIPIENT:
     raise Exception("❌ PAYMENT_RECIPIENT_SOLANA not found!")
 
 # ============================================
-# 3. نماذج الطلب
+# 3. دالة توليد استجابة x402
+# ============================================
+
+def x402_response():
+    """توليد استجابة 402 Payment Required مع Headers الصحيحة"""
+    payment_requirements = {
+        "x402Version": 2,
+        "accepts": [
+            {
+                "scheme": "exact",
+                "network": "solana",
+                "maxAmountRequired": 10000,  # 0.01 USDC (6 decimals)
+                "asset": "USDC",
+                "description": "Pay 0.01 USDC for one Telegram message"
+            }
+        ],
+        "resource": "/api/v1/telegram/send",
+        "recipient": PAYMENT_RECIPIENT
+    }
+    
+    return JSONResponse(
+        status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps(payment_requirements),
+            "X-PAYMENT-VERSION": "2"
+        },
+        content={
+            "error": "Payment Required",
+            "message": "Please pay 0.01 USDC to send this message",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana",
+            "resource": "/api/v1/telegram/send"
+        }
+    )
+
+# ============================================
+# 4. Middleware للكشف عن x402
+# ============================================
+
+@app.middleware("http")
+async def x402_middleware(request: Request, call_next):
+    """اعتراض جميع الطلبات والرد بـ 402 إذا كان الطلب للكشف"""
+    
+    # قائمة المسارات التي يجب أن تكون HTML (غير x402)
+    html_paths = ["/", "/terms", "/privacy-short"]
+    
+    # إذا كان المسار من HTML paths، استمر كالمعتاد
+    if request.url.path in html_paths:
+        return await call_next(request)
+    
+    # إذا كان الطلب من agentcash أو يطلب x402
+    user_agent = request.headers.get("user-agent", "").lower()
+    accept = request.headers.get("accept", "")
+    
+    # إذا كان الطلب للكشف عن x402 (GET أو OPTIONS)
+    if request.method in ["GET", "OPTIONS"]:
+        # إذا كان المسار للكشف أو أي مسار آخر (باستثناء HTML paths)
+        return x402_response()
+    
+    # للطلبات العادية (POST, PUT, إلخ)
+    response = await call_next(request)
+    return response
+
+# ============================================
+# 5. نماذج الطلب
 # ============================================
 
 class SendMessageRequest(BaseModel):
@@ -43,7 +109,7 @@ class RegisterAgentRequest(BaseModel):
     terms_accepted: bool
 
 # ============================================
-# 4. تخزين مؤقت للموافقات
+# 6. تخزين مؤقت للموافقات
 # ============================================
 
 agent_consents = {}
@@ -52,129 +118,7 @@ def check_agent_consent(wallet: str) -> bool:
     return agent_consents.get(wallet, {}).get("consent", False)
 
 # ============================================
-# 5. نقطة كشف x402 مخصصة (لـ agentcash)
-# ============================================
-
-@app.options("/x402/discover")
-async def options_x402_discover():
-    """استجابة OPTIONS لنقطة الكشف"""
-    return Response(
-        headers={
-            "Allow": "GET, OPTIONS",
-            "X-PAYMENT-REQUIREMENTS": json.dumps({
-                "x402Version": 2,
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "solana",
-                        "maxAmountRequired": 10000,
-                        "asset": "USDC",
-                        "description": "Pay 0.01 USDC for one Telegram message"
-                    }
-                ],
-                "resource": "/api/v1/telegram/send",
-                "recipient": PAYMENT_RECIPIENT
-            }),
-            "X-PAYMENT-VERSION": "2"
-        }
-    )
-
-@app.get("/x402/discover")
-async def x402_discover():
-    """نقطة نهاية مخصصة للكشف عن x402"""
-    return JSONResponse(
-        status_code=402,
-        headers={
-            "X-PAYMENT-REQUIREMENTS": json.dumps({
-                "x402Version": 2,
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "solana",
-                        "maxAmountRequired": 10000,
-                        "asset": "USDC",
-                        "description": "Pay 0.01 USDC for one Telegram message"
-                    }
-                ],
-                "resource": "/api/v1/telegram/send",
-                "recipient": PAYMENT_RECIPIENT
-            }),
-            "X-PAYMENT-VERSION": "2"
-        },
-        content={
-            "error": "Payment Required",
-            "message": "Please pay 0.01 USDC to send this message",
-            "amount": "0.01",
-            "currency": "USDC",
-            "recipient": PAYMENT_RECIPIENT,
-            "network": "solana",
-            "resource": "/api/v1/telegram/send"
-        }
-    )
-
-# ============================================
-# 6. دعم OPTIONS و GET للكشف من agentcash (للتوافق العكسي)
-# ============================================
-
-@app.options("/api/v1/telegram/send")
-async def options_telegram_send():
-    """استجابة OPTIONS للكشف من agentcash"""
-    return Response(
-        headers={
-            "Allow": "POST, OPTIONS",
-            "X-PAYMENT-REQUIREMENTS": json.dumps({
-                "x402Version": 2,
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "solana",
-                        "maxAmountRequired": 10000,
-                        "asset": "USDC",
-                        "description": "Pay 0.01 USDC for one Telegram message"
-                    }
-                ],
-                "resource": "/api/v1/telegram/send",
-                "recipient": PAYMENT_RECIPIENT
-            }),
-            "X-PAYMENT-VERSION": "2"
-        }
-    )
-
-@app.get("/api/v1/telegram/send")
-async def get_telegram_send():
-    """استجابة GET للكشف من agentcash"""
-    return JSONResponse(
-        status_code=402,
-        headers={
-            "X-PAYMENT-REQUIREMENTS": json.dumps({
-                "x402Version": 2,
-                "accepts": [
-                    {
-                        "scheme": "exact",
-                        "network": "solana",
-                        "maxAmountRequired": 10000,
-                        "asset": "USDC",
-                        "description": "Pay 0.01 USDC for one Telegram message"
-                    }
-                ],
-                "resource": "/api/v1/telegram/send",
-                "recipient": PAYMENT_RECIPIENT
-            }),
-            "X-PAYMENT-VERSION": "2"
-        },
-        content={
-            "error": "Payment Required",
-            "message": "Please pay 0.01 USDC to send this message",
-            "amount": "0.01",
-            "currency": "USDC",
-            "recipient": PAYMENT_RECIPIENT,
-            "network": "solana",
-            "resource": "/api/v1/telegram/send"
-        }
-    )
-
-# ============================================
-# 7. نقطة نهاية إرسال الرسالة (POST مع x402)
+# 7. نقطة نهاية إرسال الرسالة (POST)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -192,39 +136,9 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
     
     x_payment = request.headers.get("X-PAYMENT")
     
-    # إذا لم يكن هناك توقيع دفع -> طلب الدفع مع x402 Headers
+    # إذا لم يكن هناك توقيع دفع -> طلب الدفع
     if not x_payment:
-        payment_requirements = {
-            "x402Version": 2,
-            "accepts": [
-                {
-                    "scheme": "exact",
-                    "network": "solana",
-                    "maxAmountRequired": 10000,  # 0.01 USDC (6 decimals)
-                    "asset": "USDC",
-                    "description": "Pay 0.01 USDC for one Telegram message"
-                }
-            ],
-            "resource": "/api/v1/telegram/send",
-            "recipient": PAYMENT_RECIPIENT
-        }
-        
-        return JSONResponse(
-            status_code=402,
-            headers={
-                "X-PAYMENT-REQUIREMENTS": json.dumps(payment_requirements),
-                "X-PAYMENT-VERSION": "2"
-            },
-            content={
-                "error": "Payment Required",
-                "message": "Please pay 0.01 USDC to send this message",
-                "amount": "0.01",
-                "currency": "USDC",
-                "recipient": PAYMENT_RECIPIENT,
-                "network": "solana",
-                "resource": "/api/v1/telegram/send"
-            }
-        )
+        return x402_response()
     
     print(f"📨 Payment signature received: {x_payment[:20]}...")
     
@@ -290,6 +204,7 @@ async def register_agent(body: RegisterAgentRequest):
 
 @app.get("/.well-known/x402")
 async def discovery():
+    # هذا المسار مستثنى من Middleware ويعيد JSON مباشرة
     return JSONResponse(
         content={
             "version": "1.0",
@@ -317,14 +232,13 @@ async def discovery():
                     "price_unit": "per message"
                 }
             ],
-            "x402_required": True,
-            "discovery_endpoint": "/x402/discover"
+            "x402_required": True
         },
         media_type="application/json"
     )
 
 # ============================================
-# 10. شعارات SVG
+# 10. نقاط نهاية HTML (مستثناة من x402)
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -349,7 +263,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 11. الصفحة الرئيسية (HTML)
+# 10.1 الصفحة الرئيسية
 # ============================================
 
 @app.get("/")
@@ -487,7 +401,7 @@ async def root():
     """)
 
 # ============================================
-# 12. صفحة شروط الخدمة (Terms)
+# 10.2 صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -531,7 +445,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 13. صفحة سياسة الخصوصية المختصرة
+# 10.3 صفحة سياسة الخصوصية
 # ============================================
 
 @app.get("/privacy-short")
@@ -577,7 +491,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 14. تشغيل الخادم
+# 11. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
