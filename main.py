@@ -52,7 +52,68 @@ def check_agent_consent(wallet: str) -> bool:
     return agent_consents.get(wallet, {}).get("consent", False)
 
 # ============================================
-# 5. نقطة نهاية إرسال الرسالة (مع x402)
+# 5. دعم OPTIONS و GET للكشف من agentcash
+# ============================================
+
+@app.options("/api/v1/telegram/send")
+async def options_telegram_send():
+    """استجابة OPTIONS للكشف من agentcash"""
+    return Response(
+        headers={
+            "Allow": "POST, OPTIONS",
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "solana",
+                        "maxAmountRequired": 10000,
+                        "asset": "USDC",
+                        "description": "Pay 0.01 USDC for one Telegram message"
+                    }
+                ],
+                "resource": "/api/v1/telegram/send",
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2"
+        }
+    )
+
+@app.get("/api/v1/telegram/send")
+async def get_telegram_send():
+    """استجابة GET للكشف من agentcash"""
+    return JSONResponse(
+        status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "solana",
+                        "maxAmountRequired": 10000,
+                        "asset": "USDC",
+                        "description": "Pay 0.01 USDC for one Telegram message"
+                    }
+                ],
+                "resource": "/api/v1/telegram/send",
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2"
+        },
+        content={
+            "error": "Payment Required",
+            "message": "Please pay 0.01 USDC to send this message",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana",
+            "resource": "/api/v1/telegram/send"
+        }
+    )
+
+# ============================================
+# 6. نقطة نهاية إرسال الرسالة (POST مع x402)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -134,7 +195,7 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         }
 
 # ============================================
-# 6. تسجيل العميل
+# 7. تسجيل العميل
 # ============================================
 
 @app.post("/api/agent/register")
@@ -163,7 +224,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 7. ملف Discovery (JSON)
+# 8. ملف Discovery (JSON)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -201,7 +262,7 @@ async def discovery():
     )
 
 # ============================================
-# 8. شعارات SVG
+# 9. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -226,7 +287,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 9. الصفحة الرئيسية (HTML)
+# 10. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -364,7 +425,7 @@ async def root():
     """)
 
 # ============================================
-# 10. صفحة شروط الخدمة (Terms)
+# 11. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -408,7 +469,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 11. صفحة سياسة الخصوصية المختصرة
+# 12. صفحة سياسة الخصوصية المختصرة
 # ============================================
 
 @app.get("/privacy-short")
@@ -454,7 +515,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 12. تشغيل الخادم
+# 13. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
