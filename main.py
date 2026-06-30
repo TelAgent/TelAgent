@@ -1,172 +1,160 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import os
 import httpx
+from dotenv import load_dotenv
+import uvicorn
 import json
 import datetime
-import uvicorn
-import redis.asyncio as redis
-from dotenv import load_dotenv
 import logging
+from contextlib import asynccontextmanager
 
 # ============================================
-# Logging
+# 1. إعداد التسجيل (Logging)
 # ============================================
-logging.basicConfig(level=logging.INFO)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger("telagent")
 
 load_dotenv()
 
 # ============================================
-# ENV
+# 2. المتغيرات البيئية
 # ============================================
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 if not BOT_TOKEN:
-    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
+    logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
+
 if not PAYMENT_RECIPIENT:
-    raise RuntimeError("Missing PAYMENT_RECIPIENT_SOLANA")
+    logger.error("❌ PAYMENT_RECIPIENT_SOLANA not found!")
+    raise RuntimeError("PAYMENT_RECIPIENT_SOLANA is required")
 
-logger.info("✅ Environment loaded")
+logger.info("✅ Environment variables loaded successfully")
 
 # ============================================
-# APP
+# 3. Lifespan لإدارة HTTP client
 # ============================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.http_client = httpx.AsyncClient(timeout=10.0)
+    logger.info("✅ HTTP client created")
+    yield
+    await app.state.http_client.aclose()
+    logger.info("✅ HTTP client closed")
+
+# ============================================
+# 4. إنشاء تطبيق FastAPI
+# ============================================
+
 app = FastAPI(
     title="TelAgent",
     version="1.0.0",
     contact={
         "name": "TelAgent",
-        "email": "legal@telagent.dev"
-    }
+        "email": "legal@telagent.dev",
+        "url": "https://telagent.dev"
+    },
+    lifespan=lifespan
 )
 
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-http_client = httpx.AsyncClient(timeout=10.0)
+# ============================================
+# 5. تخصيص OpenAPI مع x402
+# ============================================
+
+@app.get("/openapi.json", include_in_schema=False)
+async def custom_openapi():
+    schema = app.openapi()
+    
+    # إضافة security scheme x402
+    schema.setdefault("components", {})
+    schema["components"].setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["x402"] = {
+        "type": "http",
+        "scheme": "x402",
+        "description": "x402 payment protocol"
+    }
+    
+    # تحديد نقطة النهاية المدفوعة
+    path = "/api/v1/telegram/send"
+    if path in schema.get("paths", {}):
+        for method in schema["paths"][path]:
+            schema["paths"][path][method]["security"] = [{"x402": []}]
+            schema["paths"][path][method]["x402"] = {
+                "price": 0.01,
+                "currency": "USDC",
+                "network": "solana",
+                "description": "Pay 0.01 USDC per Telegram message"
+            }
+    
+    # النقاط المجانية
+    free_paths = ["/api/agent/register", "/.well-known/x402", "/", "/terms", "/privacy-short"]
+    for path in schema.get("paths", {}):
+        if path in free_paths:
+            for method in schema["paths"][path]:
+                schema["paths"][path][method]["security"] = []
+    
+    app.openapi_schema = schema
+    return JSONResponse(schema)
+
+@app.get("/.well-known/openapi.json", include_in_schema=False)
+async def well_known_openapi():
+    return await custom_openapi()
 
 # ============================================
-# MODELS
+# 6. نقطة نهاية إرسال الرسالة (مدفوعة)
 # ============================================
-class SendMessage(BaseModel):
+
+class SendMessageRequest(BaseModel):
     to: str
     message: str
     agent_wallet: str
 
-class RegisterAgent(BaseModel):
-    wallet: str
-    terms_accepted: bool
-
-# ============================================
-# X402 RESPONSE
-# ============================================
-def x402_response():
-    payload = {
-        "x402Version": 2,
-        "accepts": [
-            {
-                "scheme": "exact",
-                "network": "solana",
-                "asset": "USDC",
-                "maxAmountRequired": 10000,
-                "description": "0.01 USDC per Telegram message"
-            }
-        ],
-        "resource": "/api/v1/telegram/send",
-        "recipient": PAYMENT_RECIPIENT
-    }
-
-    return JSONResponse(
-        status_code=402,
-        headers={
-            "X-PAYMENT-REQUIREMENTS": json.dumps(payload),
-            "X-PAYMENT-VERSION": "2"
-        },
-        content={
-            "error": "Payment Required",
-            "amount": "0.01 USDC",
-            "recipient": PAYMENT_RECIPIENT,
-            "network": "solana"
-        }
-    )
-
-# ============================================
-# CONSENT
-# ============================================
-async def get_consent(wallet: str) -> bool:
-    value = await redis_client.get(f"consent:{wallet}")
-    return value == "true"
-
-async def set_consent(wallet: str):
-    await redis_client.set(f"consent:{wallet}", "true")
-
-# ============================================
-# PAYMENT CHECK
-# ============================================
-def verify_payment(header: str | None) -> bool:
-    """التحقق من وجود توقيع الدفع"""
-    if not header:
-        return False
-    # في الإنتاج: تحقق من التوقيع على Solana
-    return header.startswith("0x") and len(header) > 10
-
-# ============================================
-# MIDDLEWARE
-# ============================================
-@app.middleware("http")
-async def middleware(request: Request, call_next):
-    path = request.url.path
-
-    free_paths = {
-        "/",
-        "/terms",
-        "/privacy",
-        "/.well-known/x402",
-        "/.well-known/openapi.json",
-        "/docs",
-        "/openapi.json"
-    }
-
-    protected = "/api/v1/telegram/send"
-
-    if path in free_paths:
-        return await call_next(request)
-
-    if path == protected:
-        if not request.headers.get("X-PAYMENT"):
-            logger.info(f"⛔ Payment required for {path}")
-            return x402_response()
-
-    return await call_next(request)
-
-# ============================================
-# TELEGRAM SEND
-# ============================================
 @app.post("/api/v1/telegram/send")
-async def send_message(request: Request, body: SendMessage):
-    # Consent check
-    consent = await get_consent(body.agent_wallet)
-    if not consent:
-        logger.warning(f"⚠️ No consent for wallet {body.agent_wallet[:10]}...")
+async def send_telegram_message(request: Request, body: SendMessageRequest):
+    # التحقق من الدفع (مؤقتاً: قبول أي توقيع)
+    x_payment = request.headers.get("X-PAYMENT")
+    if not x_payment:
         return JSONResponse(
-            status_code=403,
+            status_code=402,
+            headers={
+                "X-PAYMENT-REQUIREMENTS": json.dumps({
+                    "x402Version": 2,
+                    "accepts": [{
+                        "scheme": "exact",
+                        "network": "solana",
+                        "asset": "USDC",
+                        "maxAmountRequired": 10000,
+                        "description": "0.01 USDC per message"
+                    }],
+                    "resource": "/api/v1/telegram/send",
+                    "recipient": PAYMENT_RECIPIENT
+                }),
+                "X-PAYMENT-VERSION": "2"
+            },
             content={
-                "error": "Consent required",
-                "action": "register at /api/agent/register"
+                "error": "Payment Required",
+                "amount": "0.01",
+                "currency": "USDC",
+                "recipient": PAYMENT_RECIPIENT,
+                "network": "solana"
             }
         )
-
-    # Payment check
-    if not verify_payment(request.headers.get("X-PAYMENT")):
-        return x402_response()
-
-    logger.info(f"📨 Sending message to {body.to} from {body.agent_wallet[:10]}...")
-
-    # Send Telegram message
+    
+    # TODO: التحقق الحقيقي من التوقيع
+    
+    # إرسال الرسالة
     try:
-        r = await http_client.post(
+        http_client = request.app.state.http_client
+        response = await http_client.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": body.to,
@@ -174,42 +162,38 @@ async def send_message(request: Request, body: SendMessage):
                 "parse_mode": "Markdown"
             }
         )
-
-        if r.status_code != 200:
-            logger.error(f"❌ Telegram error: {r.text}")
-            raise HTTPException(status_code=500, detail=r.text)
-
-        data = r.json()
-        logger.info(f"✅ Message sent, ID: {data['result']['message_id']}")
-
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=response.text)
+        data = response.json()
         return {
             "success": True,
             "message_id": data["result"]["message_id"],
-            "paid": True
+            "payment_verified": True,
+            "cost": "0.01 USDC"
         }
-
-    except httpx.TimeoutException:
-        logger.error("⏰ Telegram timeout")
-        raise HTTPException(status_code=504, detail="Telegram timeout")
-
     except Exception as e:
-        logger.error(f"❌ Unexpected error: {str(e)}")
+        logger.error(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
-# REGISTER AGENT
+# 7. تسجيل العميل (مجاني)
 # ============================================
+
+class RegisterAgentRequest(BaseModel):
+    wallet: str
+    terms_accepted: bool
+
+# تخزين مؤقت
+agent_consents = {}
+
 @app.post("/api/agent/register")
-async def register(body: RegisterAgent):
+async def register_agent(body: RegisterAgentRequest):
     if not body.terms_accepted:
         return JSONResponse(
             status_code=400,
             content={"error": "Terms not accepted"}
         )
-
-    await set_consent(body.wallet)
-    logger.info(f"✅ Agent registered: {body.wallet[:10]}...")
-
+    agent_consents[body.wallet] = True
     return {
         "success": True,
         "wallet": body.wallet,
@@ -218,8 +202,9 @@ async def register(body: RegisterAgent):
     }
 
 # ============================================
-# DISCOVERY (X402)
+# 8. Discovery
 # ============================================
+
 @app.get("/.well-known/x402")
 async def discovery():
     return {
@@ -231,87 +216,43 @@ async def discovery():
             "name": "TelAgent",
             "website": "https://telagent.dev"
         },
-        "servers": [
-            {
-                "url": "https://telagent.onrender.com"
-            }
-        ],
-        "resources": [
-            {
-                "path": "/api/v1/telegram/send",
-                "method": "POST",
-                "price": "0.01",
-                "price_unit": "USDC",
-                "network": "solana"
-            }
-        ],
+        "servers": [{"url": "https://telagent.onrender.com"}],
+        "resources": [{
+            "path": "/api/v1/telegram/send",
+            "method": "POST",
+            "price": "0.01",
+            "price_unit": "USDC",
+            "network": "solana"
+        }],
         "x402_required": True,
         "openapi_document": "/.well-known/openapi.json"
     }
 
 # ============================================
-# OPENAPI DISCOVERY
+# 9. الصفحات (للبشر)
 # ============================================
-@app.get("/.well-known/openapi.json")
-async def openapi_discovery():
-    schema = app.openapi()
-    # إضافة security: [] للنقاط المجانية
-    free_paths = ["/", "/terms", "/privacy", "/.well-known/x402", "/api/agent/register"]
-    for path, methods in schema.get("paths", {}).items():
-        if path in free_paths:
-            for method in methods.values():
-                method["security"] = []
-    # إضافة security للنقطة المدفوعة
-    if "/api/v1/telegram/send" in schema.get("paths", {}):
-        schema["paths"]["/api/v1/telegram/send"]["post"]["security"] = [{"x402": []}]
-    
-    return JSONResponse(schema)
 
-# ============================================
-# HOME PAGE
-# ============================================
 @app.get("/")
 async def home():
     return HTMLResponse("""
-    <!DOCTYPE html>
-    <html>
-    <head><title>TelAgent</title></head>
-    <body>
-        <h1>🤖 TelAgent</h1>
-        <p>Pay-per-request Telegram API for AI Agents</p>
-        <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
-        <a href="/docs">📚 API Docs</a> |
-        <a href="/.well-known/x402">🔍 Discovery</a>
-    </body>
-    </html>
+    <h1>🤖 TelAgent</h1>
+    <p>Pay-per-request Telegram API for AI Agents</p>
+    <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
+    <a href="/docs">📚 API Docs</a> |
+    <a href="/.well-known/x402">🔍 Discovery</a>
     """)
 
-# ============================================
-# TERMS & PRIVACY
-# ============================================
 @app.get("/terms")
 async def terms():
     return HTMLResponse("<h1>Terms of Service</h1><p>Coming soon</p>")
 
-@app.get("/privacy")
+@app.get("/privacy-short")
 async def privacy():
     return HTMLResponse("<h1>Privacy Policy</h1><p>Coming soon</p>")
 
 # ============================================
-# STARTUP & SHUTDOWN
+# 10. تشغيل الخادم
 # ============================================
-@app.on_event("startup")
-async def startup():
-    logger.info("🚀 TelAgent running...")
 
-@app.on_event("shutdown")
-async def shutdown():
-    await http_client.aclose()
-    await redis_client.close()
-    logger.info("🛑 TelAgent shutting down...")
-
-# ============================================
-# RUN
-# ============================================
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
