@@ -1,13 +1,13 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 app = FastAPI(title="TelAgent API", version="1.0.0")
 
 
-# -------------------------
-# CORS (fix OPTIONS 405 globally)
-# -------------------------
+# =====================================================
+# CORS (fixes OPTIONS 405 everywhere)
+# =====================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,9 +16,29 @@ app.add_middleware(
 )
 
 
-# -------------------------
+# =====================================================
+# ROOT (fixes 404 / probe failure)
+# =====================================================
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "telagent",
+        "message": "API running"
+    }
+
+
+# =====================================================
+# HEALTH CHECK (optional but useful)
+# =====================================================
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+# =====================================================
 # REQUEST MODEL (POST ONLY)
-# -------------------------
+# =====================================================
 class TelegramRequest(BaseModel):
     to: str
     message: str
@@ -26,39 +46,35 @@ class TelegramRequest(BaseModel):
 
 
 # =====================================================
-# 1. TELEGRAM SEND (PROBE ROUTES - SAFE FOR SCANNERS)
+# TELEGRAM ENDPOINT (PROBE SAFE + POST EXECUTION)
 # =====================================================
 
 @app.get("/api/v1/telegram/send")
-def send_probe_get():
+def telegram_probe_get():
     return {"ok": True, "mode": "get_probe"}
 
 
 @app.options("/api/v1/telegram/send")
-def send_probe_options():
+def telegram_probe_options():
     return {"ok": True, "mode": "options_probe"}
 
 
-# =====================================================
-# 2. TELEGRAM SEND (REAL EXECUTION - POST ONLY)
-# =====================================================
-
 @app.post("/api/v1/telegram/send")
-def send_telegram(req: TelegramRequest):
+def telegram_send(req: TelegramRequest):
     return {
         "ok": True,
         "to": req.to,
         "message": req.message,
         "x402": {
+            "required": True,
             "price": 0.01,
-            "currency": "USD",
-            "required": True
+            "currency": "USD"
         }
     }
 
 
 # =====================================================
-# 3. AGENT REGISTER (SAME PATTERN)
+# AGENT REGISTER ENDPOINT
 # =====================================================
 
 @app.get("/api/agent/register")
@@ -77,9 +93,8 @@ def register_agent():
 
 
 # =====================================================
-# 4. x402 DISCOVERY ENDPOINT
+# x402 DISCOVERY (REQUIRED BY agentcash)
 # =====================================================
-
 @app.get("/.well-known/x402")
 def x402():
     return {
@@ -91,9 +106,8 @@ def x402():
 
 
 # =====================================================
-# 5. OPENAPI (agentcash REQUIRED)
+# OPENAPI (agentcash REQUIRED + x402 MARKING)
 # =====================================================
-
 @app.get("/.well-known/openapi.json", include_in_schema=False)
 def openapi():
     schema = app.openapi()
@@ -106,7 +120,7 @@ def openapi():
         "scheme": "x402"
     }
 
-    # mark paid endpoint
+    # Mark paid endpoint properly
     path = "/api/v1/telegram/send"
     if path in schema["paths"]:
         for method in schema["paths"][path]:
@@ -117,3 +131,11 @@ def openapi():
             }
 
     return schema
+
+
+# =====================================================
+# OPTIONAL: standard openapi route (fallback)
+# =====================================================
+@app.get("/openapi.json", include_in_schema=False)
+def openapi_fallback():
+    return app.openapi()
