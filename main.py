@@ -12,13 +12,163 @@ import datetime
 load_dotenv()
 
 # ============================================
-# 1. إنشاء تطبيق FastAPI
+# 1. إنشاء تطبيق FastAPI مع OpenAPI متوافق
 # ============================================
 
-app = FastAPI(title="TelAgent")
+app = FastAPI(
+    title="TelAgent",
+    version="0.1.0",
+    contact={
+        "name": "TelAgent",
+        "email": "legal@telagent.dev",
+        "url": "https://telagent.dev"
+    },
+    openapi_tags=[
+        {"name": "payment", "description": "Paid x402 endpoints"},
+        {"name": "free", "description": "Free public endpoints"}
+    ],
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,
+        "docExpansion": "none"
+    }
+)
 
 # ============================================
-# 2. المتغيرات البيئية
+# 2. تخصيص OpenAPI لإضافة x402 security
+# ============================================
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = app.openapi_schema = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "TelAgent",
+            "version": "0.1.0",
+            "description": "Telegram API for AI Agents with x402 payments",
+            "contact": {
+                "name": "TelAgent",
+                "email": "legal@telagent.dev",
+                "url": "https://telagent.dev"
+            }
+        },
+        "paths": {
+            "/api/v1/telegram/send": {
+                "post": {
+                    "summary": "Send a Telegram message (paid)",
+                    "operationId": "sendTelegramMessage",
+                    "security": [{"x402": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["to", "message", "agent_wallet"],
+                                    "properties": {
+                                        "to": {"type": "string", "description": "Telegram chat ID"},
+                                        "message": {"type": "string", "description": "Message content"},
+                                        "agent_wallet": {"type": "string", "description": "Agent wallet address"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Message sent successfully"},
+                        "402": {"description": "Payment Required - x402 payment needed"},
+                        "403": {"description": "Consent Required - Agent not registered"},
+                        "500": {"description": "Internal server error"}
+                    }
+                }
+            },
+            "/api/agent/register": {
+                "post": {
+                    "summary": "Register an agent (free)",
+                    "operationId": "registerAgent",
+                    "security": [],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["wallet", "terms_accepted"],
+                                    "properties": {
+                                        "wallet": {"type": "string", "description": "Agent wallet address"},
+                                        "terms_accepted": {"type": "boolean", "description": "Accept terms"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Agent registered successfully"},
+                        "400": {"description": "Terms not accepted"}
+                    }
+                }
+            },
+            "/.well-known/x402": {
+                "get": {
+                    "summary": "x402 discovery document (free)",
+                    "operationId": "discovery",
+                    "security": [],
+                    "responses": {
+                        "200": {"description": "Discovery document"}
+                    }
+                }
+            },
+            "/": {
+                "get": {
+                    "summary": "Home page (free)",
+                    "operationId": "root",
+                    "security": [],
+                    "responses": {
+                        "200": {"description": "HTML page"}
+                    }
+                }
+            },
+            "/terms": {
+                "get": {
+                    "summary": "Terms of service (free)",
+                    "operationId": "terms",
+                    "security": [],
+                    "responses": {
+                        "200": {"description": "HTML page"}
+                    }
+                }
+            },
+            "/privacy-short": {
+                "get": {
+                    "summary": "Privacy policy (free)",
+                    "operationId": "privacy",
+                    "security": [],
+                    "responses": {
+                        "200": {"description": "HTML page"}
+                    }
+                }
+            }
+        },
+        "components": {
+            "securitySchemes": {
+                "x402": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-PAYMENT",
+                    "description": "x402 payment signature"
+                }
+            }
+        }
+    }
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# ============================================
+# 3. المتغيرات البيئية
 # ============================================
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -30,7 +180,7 @@ if not PAYMENT_RECIPIENT:
     raise Exception("❌ PAYMENT_RECIPIENT_SOLANA not found!")
 
 # ============================================
-# 3. دالة توليد استجابة x402
+# 4. دالة توليد استجابة x402
 # ============================================
 
 def x402_response():
@@ -68,7 +218,7 @@ def x402_response():
     )
 
 # ============================================
-# 4. Middleware (معدل - لا يعترض Discovery)
+# 5. Middleware
 # ============================================
 
 @app.middleware("http")
@@ -101,7 +251,7 @@ async def x402_middleware(request: Request, call_next):
     return response
 
 # ============================================
-# 5. نماذج الطلب
+# 6. نماذج الطلب
 # ============================================
 
 class SendMessageRequest(BaseModel):
@@ -114,7 +264,7 @@ class RegisterAgentRequest(BaseModel):
     terms_accepted: bool
 
 # ============================================
-# 6. تخزين مؤقت للموافقات
+# 7. تخزين مؤقت للموافقات
 # ============================================
 
 agent_consents = {}
@@ -123,7 +273,7 @@ def check_agent_consent(wallet: str) -> bool:
     return agent_consents.get(wallet, {}).get("consent", False)
 
 # ============================================
-# 7. نقطة نهاية إرسال الرسالة (POST)
+# 8. نقطة نهاية إرسال الرسالة (POST)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -175,7 +325,7 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         }
 
 # ============================================
-# 8. تسجيل العميل
+# 9. تسجيل العميل
 # ============================================
 
 @app.post("/api/agent/register")
@@ -204,7 +354,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 9. ملف Discovery (JSON) - متوافق مع x402
+# 10. ملف Discovery (JSON)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -239,7 +389,7 @@ async def discovery():
     )
 
 # ============================================
-# 10. شعارات SVG
+# 11. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -264,7 +414,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 11. الصفحة الرئيسية (HTML)
+# 12. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -402,7 +552,7 @@ async def root():
     """)
 
 # ============================================
-# 12. صفحة شروط الخدمة (Terms)
+# 13. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -446,7 +596,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 13. صفحة سياسة الخصوصية (Privacy)
+# 14. صفحة سياسة الخصوصية (Privacy)
 # ============================================
 
 @app.get("/privacy-short")
@@ -492,7 +642,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 14. تشغيل الخادم
+# 15. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
