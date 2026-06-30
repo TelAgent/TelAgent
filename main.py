@@ -75,11 +75,11 @@ def x402_response():
 async def x402_middleware(request: Request, call_next):
     """اعتراض جميع الطلبات والرد بـ 402 إذا كان الطلب للكشف"""
     
-    # قائمة المسارات التي يجب أن تكون HTML (غير x402)
-    html_paths = ["/", "/terms", "/privacy-short"]
+    # قائمة المسارات المستثناة (تعمل بشكل طبيعي)
+    excluded_paths = ["/", "/terms", "/privacy-short", "/.well-known/x402"]
     
-    # إذا كان المسار من HTML paths، استمر كالمعتاد
-    if request.url.path in html_paths:
+    # إذا كان المسار من excluded_paths، استمر كالمعتاد
+    if request.url.path in excluded_paths:
         return await call_next(request)
     
     # إذا كان الطلب من agentcash أو يطلب x402
@@ -88,7 +88,6 @@ async def x402_middleware(request: Request, call_next):
     
     # إذا كان الطلب للكشف عن x402 (GET أو OPTIONS)
     if request.method in ["GET", "OPTIONS"]:
-        # إذا كان المسار للكشف أو أي مسار آخر (باستثناء HTML paths)
         return x402_response()
     
     # للطلبات العادية (POST, PUT, إلخ)
@@ -204,7 +203,6 @@ async def register_agent(body: RegisterAgentRequest):
 
 @app.get("/.well-known/x402")
 async def discovery():
-    # هذا المسار مستثنى من Middleware ويعيد JSON مباشرة
     return JSONResponse(
         content={
             "version": "1.0",
@@ -238,7 +236,7 @@ async def discovery():
     )
 
 # ============================================
-# 10. نقاط نهاية HTML (مستثناة من x402)
+# 10. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -263,7 +261,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 10.1 الصفحة الرئيسية
+# 11. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -401,7 +399,7 @@ async def root():
     """)
 
 # ============================================
-# 10.2 صفحة شروط الخدمة (Terms)
+# 12. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -445,7 +443,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 10.3 صفحة سياسة الخصوصية
+# 13. صفحة سياسة الخصوصية (Privacy)
 # ============================================
 
 @app.get("/privacy-short")
@@ -491,7 +489,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 11. تشغيل الخادم
+# 14. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
