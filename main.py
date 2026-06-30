@@ -1,17 +1,17 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import os
+import json
+import uvicorn
 import httpx
 from dotenv import load_dotenv
-import uvicorn
-import json
-import datetime
 import logging
 from contextlib import asynccontextmanager
 
 # ============================================
-# 1. إعداد التسجيل (Logging)
+# 1. إعداد التسجيل
 # ============================================
 
 logging.basicConfig(
@@ -30,17 +30,12 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
 
 if not BOT_TOKEN:
-    logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
     raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
-if not PAYMENT_RECIPIENT:
-    logger.error("❌ PAYMENT_RECIPIENT_SOLANA not found!")
-    raise RuntimeError("PAYMENT_RECIPIENT_SOLANA is required")
-
-logger.info("✅ Environment variables loaded successfully")
+logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. Lifespan لإدارة HTTP client
+# 3. Lifespan
 # ============================================
 
 @asynccontextmanager
@@ -52,12 +47,13 @@ async def lifespan(app: FastAPI):
     logger.info("✅ HTTP client closed")
 
 # ============================================
-# 4. إنشاء تطبيق FastAPI
+# 4. تطبيق FastAPI مع CORS
 # ============================================
 
 app = FastAPI(
-    title="TelAgent",
+    title="TelAgent API",
     version="1.0.0",
+    description="Telegram API for AI Agents with x402 payments",
     contact={
         "name": "TelAgent",
         "email": "legal@telagent.dev",
@@ -66,61 +62,63 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ============================================
-# 5. تخصيص OpenAPI مع x402
-# ============================================
-
-@app.get("/openapi.json", include_in_schema=False)
-async def custom_openapi():
-    schema = app.openapi()
-    
-    # إضافة security scheme x402
-    schema.setdefault("components", {})
-    schema["components"].setdefault("securitySchemes", {})
-    schema["components"]["securitySchemes"]["x402"] = {
-        "type": "http",
-        "scheme": "x402",
-        "description": "x402 payment protocol"
-    }
-    
-    # تحديد نقطة النهاية المدفوعة
-    path = "/api/v1/telegram/send"
-    if path in schema.get("paths", {}):
-        for method in schema["paths"][path]:
-            schema["paths"][path][method]["security"] = [{"x402": []}]
-            schema["paths"][path][method]["x402"] = {
-                "price": 0.01,
-                "currency": "USDC",
-                "network": "solana",
-                "description": "Pay 0.01 USDC per Telegram message"
-            }
-    
-    # النقاط المجانية
-    free_paths = ["/api/agent/register", "/.well-known/x402", "/", "/terms", "/privacy-short"]
-    for path in schema.get("paths", {}):
-        if path in free_paths:
-            for method in schema["paths"][path]:
-                schema["paths"][path][method]["security"] = []
-    
-    app.openapi_schema = schema
-    return JSONResponse(schema)
-
-@app.get("/.well-known/openapi.json", include_in_schema=False)
-async def well_known_openapi():
-    return await custom_openapi()
+# CORS (للاستخدام من قبل الوكلاء)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ============================================
-# 6. نقطة نهاية إرسال الرسالة (مدفوعة)
+# 5. نماذج Pydantic
 # ============================================
 
-class SendMessageRequest(BaseModel):
+class TelegramRequest(BaseModel):
     to: str
     message: str
     agent_wallet: str
 
-@app.post("/api/v1/telegram/send")
-async def send_telegram_message(request: Request, body: SendMessageRequest):
-    # التحقق من الدفع (مؤقتاً: قبول أي توقيع)
+class RegisterAgentRequest(BaseModel):
+    wallet: str
+    terms_accepted: bool
+
+# ============================================
+# 6. تخزين مؤقت
+# ============================================
+
+agent_consents = {}
+
+# ============================================
+# 7. نقطة النهاية الرئيسية (مدفوعة)
+# ============================================
+
+@app.api_route(
+    "/api/v1/telegram/send",
+    methods=["GET", "POST", "OPTIONS"]
+)
+async def send_telegram(request: Request, req: TelegramRequest = None):
+    # GET أو OPTIONS -> إرجاع معلومات عن الخدمة
+    if request.method in ["GET", "OPTIONS"]:
+        return {
+            "ok": True,
+            "method": request.method,
+            "x402": {
+                "price": 0.01,
+                "currency": "USDC",
+                "required": True,
+                "network": "solana"
+            }
+        }
+    
+    # POST -> تنفيذ الرسالة
+    if not req:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing request body"}
+        )
+    
+    # التحقق من الدفع
     x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
         return JSONResponse(
@@ -149,7 +147,15 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
             }
         )
     
-    # TODO: التحقق الحقيقي من التوقيع
+    # التحقق من موافقة العميل
+    if not agent_consents.get(req.agent_wallet):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Consent Required",
+                "action": "register at /api/agent/register"
+            }
+        )
     
     # إرسال الرسالة
     try:
@@ -157,14 +163,18 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         response = await http_client.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
-                "chat_id": body.to,
-                "text": body.message,
+                "chat_id": req.to,
+                "text": req.message,
                 "parse_mode": "Markdown"
             }
         )
         if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=response.text)
+            return JSONResponse(
+                status_code=500,
+                content={"error": response.text}
+            )
         data = response.json()
+        logger.info(f"✅ Message sent to {req.to}")
         return {
             "success": True,
             "message_id": data["result"]["message_id"],
@@ -173,40 +183,48 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         }
     except Exception as e:
         logger.error(f"Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 # ============================================
-# 7. تسجيل العميل (مجاني)
+# 8. تسجيل العميل
 # ============================================
 
-class RegisterAgentRequest(BaseModel):
-    wallet: str
-    terms_accepted: bool
-
-# تخزين مؤقت
-agent_consents = {}
-
-@app.post("/api/agent/register")
-async def register_agent(body: RegisterAgentRequest):
+@app.api_route(
+    "/api/agent/register",
+    methods=["GET", "POST", "OPTIONS"]
+)
+async def register_agent(request: Request, body: RegisterAgentRequest = None):
+    if request.method in ["GET", "OPTIONS"]:
+        return {"status": "available", "method": request.method}
+    
+    if not body:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing request body"}
+        )
+    
     if not body.terms_accepted:
         return JSONResponse(
             status_code=400,
             content={"error": "Terms not accepted"}
         )
+    
     agent_consents[body.wallet] = True
     return {
         "success": True,
         "wallet": body.wallet,
-        "consent": True,
-        "timestamp": datetime.datetime.utcnow().isoformat()
+        "consent": True
     }
 
 # ============================================
-# 8. Discovery
+# 9. Discovery
 # ============================================
 
 @app.get("/.well-known/x402")
-async def discovery():
+async def x402_discovery():
     return {
         "version": "1.0",
         "identifier": "telagent",
@@ -229,17 +247,54 @@ async def discovery():
     }
 
 # ============================================
-# 9. الصفحات (للبشر)
+# 10. OpenAPI مع x402
+# ============================================
+
+@app.get("/.well-known/openapi.json", include_in_schema=False)
+async def openapi():
+    schema = app.openapi()
+    
+    schema.setdefault("components", {})
+    schema["components"].setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["x402"] = {
+        "type": "http",
+        "scheme": "x402"
+    }
+    
+    path = "/api/v1/telegram/send"
+    if path in schema.get("paths", {}):
+        for method in schema["paths"][path]:
+            schema["paths"][path][method]["security"] = [{"x402": []}]
+            schema["paths"][path][method]["x402"] = {
+                "price": 0.01,
+                "currency": "USDC"
+            }
+    
+    return JSONResponse(schema)
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_root():
+    return await openapi()
+
+# ============================================
+# 11. الصفحات
 # ============================================
 
 @app.get("/")
 async def home():
     return HTMLResponse("""
-    <h1>🤖 TelAgent</h1>
-    <p>Pay-per-request Telegram API for AI Agents</p>
-    <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
-    <a href="/docs">📚 API Docs</a> |
-    <a href="/.well-known/x402">🔍 Discovery</a>
+    <!DOCTYPE html>
+    <html>
+    <head><title>TelAgent</title></head>
+    <body>
+        <h1>🤖 TelAgent</h1>
+        <p>Pay-per-request Telegram API for AI Agents</p>
+        <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
+        <a href="/docs">📚 API Docs</a> |
+        <a href="/.well-known/x402">🔍 Discovery</a> |
+        <a href="/.well-known/openapi.json">📋 OpenAPI</a>
+    </body>
+    </html>
     """)
 
 @app.get("/terms")
@@ -251,7 +306,7 @@ async def privacy():
     return HTMLResponse("<h1>Privacy Policy</h1><p>Coming soon</p>")
 
 # ============================================
-# 10. تشغيل الخادم
+# 12. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
