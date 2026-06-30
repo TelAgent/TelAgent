@@ -8,11 +8,54 @@ import uvicorn
 from decimal import Decimal
 import json
 import datetime
+import logging
+from contextlib import asynccontextmanager
+
+# ============================================
+# 1. إعداد التسجيل (Logging)
+# ============================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("telagent")
 
 load_dotenv()
 
 # ============================================
-# 1. إنشاء تطبيق FastAPI
+# 2. المتغيرات البيئية (مع تحقق أفضل)
+# ============================================
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
+
+if not BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
+
+if not PAYMENT_RECIPIENT:
+    logger.error("❌ PAYMENT_RECIPIENT_SOLANA not found in environment variables!")
+    raise RuntimeError("PAYMENT_RECIPIENT_SOLANA is required")
+
+logger.info("✅ Environment variables loaded successfully")
+
+# ============================================
+# 3. Lifespan لإدارة HTTP client
+# ============================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: إنشاء HTTP client
+    app.state.http_client = httpx.AsyncClient(timeout=10.0)
+    logger.info("✅ HTTP client created")
+    yield
+    # Shutdown: إغلاق HTTP client
+    await app.state.http_client.aclose()
+    logger.info("✅ HTTP client closed")
+
+# ============================================
+# 4. إنشاء تطبيق FastAPI
 # ============================================
 
 app = FastAPI(
@@ -22,11 +65,12 @@ app = FastAPI(
         "name": "TelAgent",
         "email": "legal@telagent.dev",
         "url": "https://telagent.dev"
-    }
+    },
+    lifespan=lifespan
 )
 
 # ============================================
-# 2. تخصيص OpenAPI
+# 5. تخصيص OpenAPI (متوافق مع x402)
 # ============================================
 
 def custom_openapi():
@@ -45,6 +89,7 @@ def custom_openapi():
                 "url": "https://telagent.dev"
             }
         },
+        "security": [{"x402": []}],
         "paths": {
             "/api/v1/telegram/send": {
                 "post": {
@@ -111,6 +156,16 @@ def custom_openapi():
                     }
                 }
             },
+            "/.well-known/openapi.json": {
+                "get": {
+                    "summary": "OpenAPI specification (free)",
+                    "operationId": "openapi",
+                    "security": [],
+                    "responses": {
+                        "200": {"description": "OpenAPI specification"}
+                    }
+                }
+            },
             "/": {
                 "get": {
                     "summary": "Home page (free)",
@@ -160,19 +215,38 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # ============================================
-# 3. المتغيرات البيئية
+# 6. نقاط نهاية Discovery
 # ============================================
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi():
+    """نقطة نهاية OpenAPI للتسجيل"""
+    return JSONResponse(custom_openapi())
 
-if not BOT_TOKEN:
-    raise Exception("❌ TELEGRAM_BOT_TOKEN not found!")
-if not PAYMENT_RECIPIENT:
-    raise Exception("❌ PAYMENT_RECIPIENT_SOLANA not found!")
+@app.get("/.well-known/openapi.json", include_in_schema=False)
+async def get_well_known_openapi():
+    """نقطة نهاية OpenAPI متوافقة مع x402"""
+    return JSONResponse(custom_openapi())
 
 # ============================================
-# 4. دالة توليد استجابة x402
+# 7. تخزين الموافقات (في الذاكرة مؤقتاً - للإنتاج استخدم Redis/PostgreSQL)
+# ============================================
+
+agent_consents = {}
+
+def check_agent_consent(wallet: str) -> bool:
+    """التحقق من موافقة العميل"""
+    return agent_consents.get(wallet, {}).get("consent", False)
+
+def save_agent_consent(wallet: str):
+    """حفظ موافقة العميل"""
+    agent_consents[wallet] = {
+        "consent": True,
+        "timestamp": datetime.datetime.now().isoformat()
+    }
+
+# ============================================
+# 8. دالة توليد استجابة x402
 # ============================================
 
 def x402_response():
@@ -210,12 +284,12 @@ def x402_response():
     )
 
 # ============================================
-# 5. Middleware
+# 9. Middleware (محسّن)
 # ============================================
 
 @app.middleware("http")
 async def x402_middleware(request: Request, call_next):
-    """اعتراض الطلبات فقط لنقطة النهاية المدفوعة"""
+    """اعتراض الطلبات لنقطة النهاية المدفوعة مع التحقق من X-PAYMENT"""
     
     # المسارات المستثناة تماماً (تعمل بشكل طبيعي)
     excluded_paths = [
@@ -223,6 +297,7 @@ async def x402_middleware(request: Request, call_next):
         "/terms",
         "/privacy-short",
         "/.well-known/x402",
+        "/.well-known/openapi.json",
         "/docs",
         "/openapi.json"
     ]
@@ -231,19 +306,21 @@ async def x402_middleware(request: Request, call_next):
     if request.url.path in excluded_paths:
         return await call_next(request)
     
-    # المسارات المحمية (تتطلب دفع x402)
-    protected_paths = ["/api/v1/telegram/send"]
+    # المسار المحمي (يتطلب دفع x402)
+    if request.url.path == "/api/v1/telegram/send":
+        # التحقق من وجود توقيع X-PAYMENT
+        x_payment = request.headers.get("X-PAYMENT")
+        
+        # إذا كان الطلب GET أو OPTIONS -> طلب دفع
+        if request.method in ["GET", "OPTIONS"] or not x_payment:
+            return x402_response()
     
-    # إذا كان المسار محمياً والطريقة GET أو OPTIONS -> طلب دفع
-    if request.url.path in protected_paths and request.method in ["GET", "OPTIONS"]:
-        return x402_response()
-    
-    # للطلبات العادية (POST, PUT, إلخ) أو المسارات الأخرى
+    # للطلبات العادية (POST مع X-PAYMENT) أو المسارات الأخرى
     response = await call_next(request)
     return response
 
 # ============================================
-# 6. نماذج الطلب
+# 10. نماذج الطلب
 # ============================================
 
 class SendMessageRequest(BaseModel):
@@ -256,16 +333,7 @@ class RegisterAgentRequest(BaseModel):
     terms_accepted: bool
 
 # ============================================
-# 7. تخزين مؤقت للموافقات
-# ============================================
-
-agent_consents = {}
-
-def check_agent_consent(wallet: str) -> bool:
-    return agent_consents.get(wallet, {}).get("consent", False)
-
-# ============================================
-# 8. نقطة نهاية إرسال الرسالة (POST)
+# 11. نقطة نهاية إرسال الرسالة (POST)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -283,41 +351,54 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
     
     x_payment = request.headers.get("X-PAYMENT")
     
-    # إذا لم يكن هناك توقيع دفع -> طلب الدفع
+    # التحقق من وجود توقيع الدفع (يتم أيضاً في Middleware، لكن للتأكيد)
     if not x_payment:
         return x402_response()
     
-    print(f"📨 Payment signature received: {x_payment[:20]}...")
+    # TODO: في الإنتاج، قم بالتحقق من صحة التوقيع هنا
+    # (مثل التحقق من التوقيع على Solana)
+    logger.info(f"📨 Payment signature received: {x_payment[:20]}...")
     
-    # إرسال الرسالة عبر تيلغرام
-    async with httpx.AsyncClient() as http_client:
+    try:
+        # إرسال الرسالة عبر تيلغرام باستخدام HTTP client المشترك
+        http_client = request.app.state.http_client
         response = await http_client.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": body.to,
                 "text": body.message,
                 "parse_mode": "Markdown"
-            },
-            timeout=10.0
+            }
         )
         
         if response.status_code != 200:
             error_detail = response.json().get("description", "Unknown error")
+            logger.error(f"Telegram API error: {error_detail}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Telegram API error: {error_detail}"
             )
         
         data = response.json()
+        logger.info(f"✅ Message sent to {body.to}, message_id: {data['result']['message_id']}")
+        
         return {
             "success": True,
             "message_id": data["result"]["message_id"],
             "payment_verified": True,
             "cost": "0.01 USDC"
         }
+    
+    except httpx.TimeoutException:
+        logger.error("Timeout while calling Telegram API")
+        raise HTTPException(status_code=504, detail="Telegram API timeout")
+    
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # ============================================
-# 9. تسجيل العميل
+# 12. تسجيل العميل
 # ============================================
 
 @app.post("/api/agent/register")
@@ -331,11 +412,8 @@ async def register_agent(body: RegisterAgentRequest):
             }
         )
     
-    agent_consents[body.wallet] = {
-        "consent": True,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "ip": "recorded"
-    }
+    save_agent_consent(body.wallet)
+    logger.info(f"✅ Agent registered: {body.wallet}")
     
     return {
         "success": True,
@@ -346,7 +424,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 10. ملف Discovery (JSON)
+# 13. ملف Discovery (JSON)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -375,13 +453,14 @@ async def discovery():
                     "price_unit": "per message"
                 }
             ],
-            "x402_required": True
+            "x402_required": True,
+            "openapi_document": "/.well-known/openapi.json"
         },
         media_type="application/json"
     )
 
 # ============================================
-# 11. شعارات SVG
+# 14. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -406,7 +485,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 12. الصفحة الرئيسية (HTML)
+# 15. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -544,7 +623,7 @@ async def root():
     """)
 
 # ============================================
-# 13. صفحة شروط الخدمة (Terms)
+# 16. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -588,7 +667,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 14. صفحة سياسة الخصوصية (Privacy)
+# 17. صفحة سياسة الخصوصية (Privacy)
 # ============================================
 
 @app.get("/privacy-short")
@@ -634,7 +713,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 15. تشغيل الخادم
+# 18. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
