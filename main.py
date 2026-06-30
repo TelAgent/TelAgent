@@ -30,34 +30,29 @@ if not PAYMENT_RECIPIENT:
     raise Exception("❌ PAYMENT_RECIPIENT_SOLANA not found!")
 
 # ============================================
-# 3. نموذج الطلب
+# 3. نماذج الطلب
 # ============================================
 
 class SendMessageRequest(BaseModel):
     to: str
     message: str
-    agent_wallet: str  # required for tracking
+    agent_wallet: str
 
 class RegisterAgentRequest(BaseModel):
     wallet: str
     terms_accepted: bool
 
 # ============================================
-# 4. تخزين مؤقت للموافقات (في الإنتاج استخدم قاعدة بيانات)
+# 4. تخزين مؤقت للموافقات
 # ============================================
 
 agent_consents = {}
 
-# ============================================
-# 5. دالة للتحقق من موافقة العميل
-# ============================================
-
 def check_agent_consent(wallet: str) -> bool:
-    """تحقق مما إذا كان العميل قد وافق على الشروط"""
     return agent_consents.get(wallet, {}).get("consent", False)
 
 # ============================================
-# 6. نقطة نهاية إرسال الرسالة
+# 5. نقطة نهاية إرسال الرسالة (مع x402)
 # ============================================
 
 @app.post("/api/v1/telegram/send")
@@ -75,9 +70,29 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
     
     x_payment = request.headers.get("X-PAYMENT")
     
+    # إذا لم يكن هناك توقيع دفع -> طلب الدفع مع x402 Headers
     if not x_payment:
+        payment_requirements = {
+            "x402Version": 2,
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "network": "solana",
+                    "maxAmountRequired": 10000,  # 0.01 USDC (6 decimals)
+                    "asset": "USDC",
+                    "description": "Pay 0.01 USDC for one Telegram message"
+                }
+            ],
+            "resource": "/api/v1/telegram/send",
+            "recipient": PAYMENT_RECIPIENT
+        }
+        
         return JSONResponse(
             status_code=402,
+            headers={
+                "X-PAYMENT-REQUIREMENTS": json.dumps(payment_requirements),
+                "X-PAYMENT-VERSION": "2"
+            },
             content={
                 "error": "Payment Required",
                 "message": "Please pay 0.01 USDC to send this message",
@@ -91,6 +106,7 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
     
     print(f"📨 Payment signature received: {x_payment[:20]}...")
     
+    # إرسال الرسالة عبر تيلغرام
     async with httpx.AsyncClient() as http_client:
         response = await http_client.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -118,7 +134,7 @@ async def send_telegram_message(request: Request, body: SendMessageRequest):
         }
 
 # ============================================
-# 7. تسجيل العميل مع الموافقة على الشروط
+# 6. تسجيل العميل
 # ============================================
 
 @app.post("/api/agent/register")
@@ -147,7 +163,45 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 8. شعار SVG
+# 7. ملف Discovery (JSON)
+# ============================================
+
+@app.get("/.well-known/x402")
+async def discovery():
+    return JSONResponse(
+        content={
+            "version": "1.0",
+            "identifier": "telagent",
+            "name": "TelAgent - Telegram API",
+            "description": "Send Telegram messages for AI Agents with x402 payments",
+            "owner": {
+                "name": "TelAgent",
+                "website": "https://telagent.dev"
+            },
+            "servers": [
+                {
+                    "url": "https://telagent.onrender.com/api/v1",
+                    "price_schema": "x402",
+                    "currency": "USDC",
+                    "chain": "solana"
+                }
+            ],
+            "resources": [
+                {
+                    "path": "/telegram/send",
+                    "method": "POST",
+                    "description": "Send a Telegram message",
+                    "price": "0.01",
+                    "price_unit": "per message"
+                }
+            ],
+            "x402_required": True
+        },
+        media_type="application/json"
+    )
+
+# ============================================
+# 8. شعارات SVG
 # ============================================
 
 LOGO_ICON_HTML = """
@@ -172,7 +226,7 @@ LOGO_MINI_HTML = """
 """
 
 # ============================================
-# 9. الصفحة الرئيسية
+# 9. الصفحة الرئيسية (HTML)
 # ============================================
 
 @app.get("/")
@@ -310,106 +364,7 @@ async def root():
     """)
 
 # ============================================
-# 10. صفحة Discovery
-# ============================================
-
-@app.get("/.well-known/x402")
-async def discovery():
-    return HTMLResponse("""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TelAgent — x402 Discovery</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: #070a14; min-height: 100vh; display: flex; align-items: center; justify-content: center; color: #e8edf5; padding: 24px; background-image: radial-gradient(ellipse at 20% 50%, rgba(79,70,229,0.1) 0%, transparent 60%), radial-gradient(ellipse at 80% 50%, rgba(124,58,237,0.08) 0%, transparent 60%); }
-        .container { max-width: 800px; width: 100%; background: rgba(255,255,255,0.02); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.06); border-radius: 60px; padding: 48px 52px; box-shadow: 0 40px 120px rgba(0,0,0,0.8); }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
-        .logo { display: flex; align-items: center; gap: 12px; }
-        .logo span { font-size: 20px; font-weight: 600; }
-        .badge { background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.2); color: #6ee7b7; padding: 6px 16px; border-radius: 40px; font-size: 12px; font-weight: 500; }
-        .title { font-size: 28px; font-weight: 700; margin-bottom: 8px; background: linear-gradient(to right, #f8fafc, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .subtitle { color: #94a3b8; font-size: 16px; margin-bottom: 32px; }
-        .card { background: rgba(0,0,0,0.3); border-radius: 20px; padding: 24px 28px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.05); }
-        .card .label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: #64748b; margin-bottom: 6px; }
-        .card .value { font-size: 18px; font-weight: 500; color: #e8edf5; word-break: break-all; }
-        .card .value .highlight { color: #a78bfa; }
-        .card .value .price { color: #6ee7b7; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        .json-box { background: rgba(0,0,0,0.4); border-radius: 16px; padding: 20px; margin-top: 24px; border: 1px solid rgba(255,255,255,0.05); overflow-x: auto; }
-        .json-box pre { font-family: monospace; font-size: 13px; color: #86efac; margin: 0; white-space: pre-wrap; word-break: break-all; }
-        .json-box .key { color: #fcd34d; }
-        .json-box .string { color: #6ee7b7; }
-        .json-box .number { color: #60a5fa; }
-        .json-box .boolean { color: #c4b5fd; }
-        .footer { margin-top: 32px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.04); display: flex; justify-content: space-between; font-size: 13px; color: #64748b; }
-        .footer a { color: #64748b; text-decoration: none; }
-        .footer a:hover { color: #e8edf5; }
-        @media (max-width: 640px) { .container { padding: 32px 20px; border-radius: 32px; } .grid-2 { grid-template-columns: 1fr; } .title { font-size: 24px; } .header { flex-direction: column; align-items: flex-start; gap: 12px; } }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">
-                """ + LOGO_MINI_HTML + """
-                <span>TelAgent</span>
-            </div>
-            <span class="badge">● x402 Discovery</span>
-        </div>
-        <div class="title">Service Discovery</div>
-        <div class="subtitle">x402 protocol manifest for AI Agents</div>
-        <div class="card"><div class="label">📡 Service</div><div class="value">TelAgent — <span class="highlight">Telegram API</span></div></div>
-        <div class="grid-2">
-            <div class="card"><div class="label">🔗 Identifier</div><div class="value" style="font-family:monospace;font-size:15px;">telagent</div></div>
-            <div class="card"><div class="label">⚡ Protocol</div><div class="value">x402 <span style="color:#64748b;font-size:14px;font-weight:400;">v1.0</span></div></div>
-        </div>
-        <div class="grid-2">
-            <div class="card"><div class="label">💰 Price</div><div class="value price">0.01 USDC <span style="color:#64748b;font-size:14px;font-weight:400;">per message</span></div></div>
-            <div class="card"><div class="label">🌐 Network</div><div class="value">Solana</div></div>
-        </div>
-        <div class="card"><div class="label">📋 Resource</div><div class="value" style="font-family:monospace;font-size:16px;"><span style="color:#fcd34d;">POST</span> /api/v1/telegram/send</div></div>
-        <div class="card" style="border-color:rgba(167,139,250,0.15);"><div class="label">🔗 Servers</div><div class="value" style="font-size:15px;font-family:monospace;word-break:break-all;">http://localhost:8000/api/v1</div></div>
-        <div class="json-box">
-            <pre>{
-  <span class="key">"version"</span>: <span class="string">"1.0"</span>,
-  <span class="key">"identifier"</span>: <span class="string">"telagent"</span>,
-  <span class="key">"name"</span>: <span class="string">"TelAgent - Telegram API"</span>,
-  <span class="key">"description"</span>: <span class="string">"Send Telegram messages for AI Agents with x402 payments"</span>,
-  <span class="key">"owner"</span>: {
-    <span class="key">"name"</span>: <span class="string">"TelAgent"</span>,
-    <span class="key">"website"</span>: <span class="string">"https://telagent.dev"</span>
-  },
-  <span class="key">"servers"</span>: [
-    {
-      <span class="key">"url"</span>: <span class="string">"http://localhost:8000/api/v1"</span>,
-      <span class="key">"price_schema"</span>: <span class="string">"x402"</span>,
-      <span class="key">"currency"</span>: <span class="string">"USDC"</span>,
-      <span class="key">"chain"</span>: <span class="string">"solana"</span>
-    }
-  ],
-  <span class="key">"resources"</span>: [
-    {
-      <span class="key">"path"</span>: <span class="string">"/telegram/send"</span>,
-      <span class="key">"method"</span>: <span class="string">"POST"</span>,
-      <span class="key">"description"</span>: <span class="string">"Send a Telegram message"</span>,
-      <span class="key">"price"</span>: <span class="string">"0.01"</span>,
-      <span class="key">"price_unit"</span>: <span class="string">"per message"</span>
-    }
-  ],
-  <span class="key">"x402_required"</span>: <span class="boolean">true</span>
-}</pre>
-        </div>
-        <div class="footer"><span>© 2026 TelAgent</span><span><a href="/">Home</a> • <a href="/docs">Docs</a> • <a href="https://x402scan.com" target="_blank">x402scan</a></span></div>
-    </div>
-</body>
-</html>
-    """)
-
-# ============================================
-# 11. صفحة شروط الخدمة (Terms)
+# 10. صفحة شروط الخدمة (Terms)
 # ============================================
 
 @app.get("/terms")
@@ -453,7 +408,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 12. صفحة سياسة الخصوصية المختصرة
+# 11. صفحة سياسة الخصوصية المختصرة
 # ============================================
 
 @app.get("/privacy-short")
@@ -499,7 +454,7 @@ body { font-family:'Inter',sans-serif; background:#070a14; min-height:100vh; dis
     """)
 
 # ============================================
-# 13. تشغيل الخادم
+# 12. تشغيل الخادم
 # ============================================
 
 if __name__ == "__main__":
