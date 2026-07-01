@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import os
 import json
@@ -231,7 +231,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 10. OpenAPI (مع x-payment-info)
+# 10. OpenAPI المخصص (مع x-payment-info)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -243,7 +243,7 @@ async def openapi():
             "version": "1.0.0",
             "description": "Telegram API for AI Agents with x402 payments",
             "contact": {"email": "legal@telagent.dev"},
-            "x-guidance": "Use POST /api/v1/telegram/send with {to, message, agent_wallet}. Requires x402 payment."
+            "x-guidance": "Use POST /api/v1/telegram/send. Requires x402 payment with X-PAYMENT header."
         },
         "paths": {
             "/api/v1/telegram/send": {
