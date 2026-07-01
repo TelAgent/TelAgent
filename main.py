@@ -28,6 +28,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
 
+# رابط الخدمة الفعلي على Render — اضبطه في متغيرات البيئة على Render
+# ليطابق دائمًا رابط النشر الحقيقي (مثال: https://telagent-py.onrender.com)
+SERVICE_URL = os.getenv("SERVICE_URL", "https://telagent-py.onrender.com")
+
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
@@ -155,7 +159,7 @@ async def telegram_send(request: Request, req: TelegramRequest):
     x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
-    
+
     # التحقق من موافقة العميل مسبقاً
     if not agent_consents.get(req.agent_wallet):
         return JSONResponse(
@@ -165,12 +169,13 @@ async def telegram_send(request: Request, req: TelegramRequest):
                 "action": "register at /api/agent/register"
             }
         )
-    
+
     # معالجة وإرسال الرسالة إلى تليجرام
     try:
         http_client = request.app.state.http_client
+        # تم تصحيح الرابط: يجب أن يكون api.telegram.org/bot<TOKEN>/...
         response = await http_client.post(
-            f"https://telegram.org{BOT_TOKEN}/sendMessage",
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": req.to,
                 "text": req.message,
@@ -238,7 +243,8 @@ async def x402_discovery():
             "name": "TelAgent",
             "website": "https://telagent.dev"
         },
-        "servers": [{"url": "https://onrender.com"}],
+        # تم تصحيح الرابط: يجب أن يشير إلى رابط النشر الفعلي على Render
+        "servers": [{"url": SERVICE_URL}],
         "resources": [{
             "path": "/api/v1/telegram/send",
             "method": "POST",
@@ -257,14 +263,14 @@ async def x402_discovery():
 @app.get("/.well-known/openapi.json", include_in_schema=False)
 async def openapi():
     schema = app.openapi()
-    
+
     schema.setdefault("components", {})
     schema["components"].setdefault("securitySchemes", {})
     schema["components"]["securitySchemes"]["x402"] = {
         "type": "http",
         "scheme": "x402"
     }
-    
+
     path = "/api/v1/telegram/send"
     if path in schema.get("paths", {}):
         for method in schema["paths"][path]:
@@ -273,7 +279,7 @@ async def openapi():
                 "price": 0.01,
                 "currency": "USDC"
             }
-    
+
     return JSONResponse(schema)
 
 @app.get("/openapi.json", include_in_schema=False)
