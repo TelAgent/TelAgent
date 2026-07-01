@@ -80,29 +80,42 @@ app.add_middleware(
 # 5. دالة مساعدة لردود الدفع الموحدة (x402 Helper)
 # ============================================
 
+# معرّف شبكة Solana mainnet بصيغة CAIP-2 كما يتطلبه x402 v2
+SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+
 def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
     """
-    توليد رد 402 المطابق لمواصفات بروتوكول x402 (PaymentRequirements).
-    ملاحظة مهمة: يجب أن تكون بيانات الدفع في جسم الرد (body) نفسه،
-    وليست مخفية داخل ترويسة (header) مخصصة — وإلا لن تتعرف عليها أدوات
-    الفحص مثل x402scan / mppscan.
+    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2).
+    الفروقات الجوهرية عن v1:
+      - "amount" بدل "maxAmountRequired"
+      - كائن "resource" منفصل بالمستوى الأعلى (url/description/mimeType)
+      - "network" بصيغة CAIP-2 مثل "solana:5eykt4..."
+      - حقل "extensions" مطلوب بالمستوى الأعلى
     """
     resource_url = f"{SERVICE_URL}{resource_path}"
     return JSONResponse(
         status_code=402,
         content={
-            "x402Version": 1,
+            "x402Version": 2,
+            "error": "PAYMENT-SIGNATURE header is required",
+            "resource": {
+                "url": resource_url,
+                "description": description,
+                "mimeType": "application/json"
+            },
             "accepts": [{
                 "scheme": "exact",
-                "network": "solana",
-                "maxAmountRequired": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
-                "resource": resource_url,
-                "description": description,
-                "mimeType": "application/json",
-                "payTo": PAYMENT_RECIPIENT,
+                "network": SOLANA_MAINNET_CAIP2,
+                "amount": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
                 "asset": USDC_MINT_SOLANA,
-                "maxTimeoutSeconds": 60
-            }]
+                "payTo": PAYMENT_RECIPIENT,
+                "maxTimeoutSeconds": 60,
+                "extra": {
+                    "name": "USD Coin",
+                    "version": "2"
+                }
+            }],
+            "extensions": {}
         }
     )
 
@@ -146,7 +159,8 @@ agent_consents = {}
 @app.get("/api/v1/telegram/send")
 async def telegram_probe_get(request: Request):
     # الفاحص يطلب GET للتأكد من وجود نظام حماية الدفع
-    x_payment = request.headers.get("X-PAYMENT")
+    # ندعم ترويسة v2 (PAYMENT-SIGNATURE) وأيضاً v1 (X-PAYMENT) للتوافق
+    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
     return {"ok": True, "message": "Payment verified for GET probe"}
@@ -157,8 +171,8 @@ async def telegram_probe_options():
 
 @app.post("/api/v1/telegram/send")
 async def telegram_send(request: Request, req: TelegramRequest):
-    # التحقق من وجود الترويسة الخاصة بالدفع
-    x_payment = request.headers.get("X-PAYMENT")
+    # التحقق من وجود الترويسة الخاصة بالدفع (v2 ثم v1 كخيار احتياطي)
+    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
 
@@ -252,8 +266,8 @@ async def x402_discovery():
             "path": "/api/v1/telegram/send",
             "method": "POST",
             "scheme": "exact",
-            "network": "solana",
-            "maxAmountRequired": "10000",
+            "network": SOLANA_MAINNET_CAIP2,
+            "amount": "10000",
             "asset": USDC_MINT_SOLANA,
             "payTo": PAYMENT_RECIPIENT,
             "description": "0.01 USDC per message"
