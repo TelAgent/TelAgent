@@ -123,7 +123,7 @@ def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC 
 # 6. الروابط الأساسية والـ Health Check
 # ============================================
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {
         "status": "ok",
@@ -132,7 +132,7 @@ async def root():
         "message": "API is running"
     }
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "healthy"}
 
@@ -156,7 +156,7 @@ agent_consents = {}
 # 8. مسار إرسال الرسائل (Telegram Send API)
 # ============================================
 
-@app.get("/api/v1/telegram/send")
+@app.api_route("/api/v1/telegram/send", methods=["GET", "HEAD"])
 async def telegram_probe_get(request: Request):
     # الفاحص يطلب GET للتأكد من وجود نظام حماية الدفع
     # ندعم ترويسة v2 (PAYMENT-SIGNATURE) وأيضاً v1 (X-PAYMENT) للتوافق
@@ -222,7 +222,7 @@ async def telegram_send(request: Request, req: TelegramRequest):
 # 9. تسجيل العميل وموافقته (Agent Registration)
 # ============================================
 
-@app.get("/api/agent/register")
+@app.api_route("/api/agent/register", methods=["GET", "HEAD"])
 async def register_probe_get():
     return {"ok": True, "message": "Ready for registration"}
 
@@ -248,7 +248,7 @@ async def register_agent(body: RegisterAgentRequest):
 # 10. بروتوكول الاكتشاف (x402 Discovery)
 # ============================================
 
-@app.get("/.well-known/x402")
+@app.api_route("/.well-known/x402", methods=["GET", "HEAD"])
 async def x402_discovery():
     return {
         "version": "1.0",
@@ -310,21 +310,21 @@ async def openapi_root():
 # 12. الصفحات والروابط الفرعية المطلوبة للفحص
 # ============================================
 
-@app.get("/terms")
+@app.api_route("/terms", methods=["GET", "HEAD"])
 async def terms_page():
     return {"message": "Terms of Service for TelAgent"}
 
-@app.get("/privacy-short")
+@app.api_route("/privacy-short", methods=["GET", "HEAD"])
 async def privacy_page():
     return {"message": "Privacy Policy Summary for TelAgent"}
 
-@app.options("/{full_path:path}")
+@app.options("/{full_path:path}", include_in_schema=False)
 async def catch_all_options(full_path: str):
     # يمنع رد 405 على طلبات OPTIONS الاستكشافية التي قد ترسلها أدوات
     # الفحص (x402scan / mppscan) على أي مسار غير معرّف صراحة
     return JSONResponse(status_code=200, content={"ok": True})
 
-@app.get("/home", response_class=HTMLResponse)
+@app.api_route("/home", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def home_ui():
     return """
     <!DOCTYPE html>
