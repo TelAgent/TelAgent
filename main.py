@@ -10,7 +10,7 @@ import httpx
 from dotenv import load_dotenv
 
 # ============================================
-# 1. إعداد التسجيل (Logging)
+# 1. إعداد التسجيل
 # ============================================
 
 logging.basicConfig(
@@ -72,7 +72,7 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. دالة رد 402 (x402 v2)
+# 5. دالة رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -104,7 +104,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 6. نقاط النهاية المجانية (security: [])
+# 6. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -124,7 +124,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 7. تسجيل العميل (مجاني)
+# 7. تسجيل العميل
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -145,7 +145,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 8. نقطة الدفع الرئيسية (مع x402)
+# 8. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -204,7 +204,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 9. Discovery (x402)
+# 9. Discovery
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -231,7 +231,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 10. OpenAPI (متوافق مع x402scan)
+# 10. OpenAPI (مع x-payment-info)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
