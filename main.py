@@ -29,8 +29,12 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
 
 # رابط الخدمة الفعلي على Render — اضبطه في متغيرات البيئة على Render
-# ليطابق دائمًا رابط النشر الحقيقي (مثال: https://telagent-py.onrender.com)
-SERVICE_URL = os.getenv("SERVICE_URL", "https://telagent-py.onrender.com")
+# ليطابق دائمًا رابط النشر الحقيقي (مثال: https://telagent.onrender.com)
+SERVICE_URL = os.getenv("SERVICE_URL", "https://telagent.onrender.com")
+
+# عنوان عملة USDC الرسمي على شبكة Solana (mainnet) — هذا هو "asset" المطلوب
+# في مواصفات x402، وليس النص "USDC" فقط
+USDC_MINT_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
@@ -76,31 +80,29 @@ app.add_middleware(
 # 5. دالة مساعدة لردود الدفع الموحدة (x402 Helper)
 # ============================================
 
-def get_x402_payment_response(resource_path: str):
-    """توليد رد 402 المطلوب من قبل بروتوكول x402 وأداة الفحص"""
+def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
+    """
+    توليد رد 402 المطابق لمواصفات بروتوكول x402 (PaymentRequirements).
+    ملاحظة مهمة: يجب أن تكون بيانات الدفع في جسم الرد (body) نفسه،
+    وليست مخفية داخل ترويسة (header) مخصصة — وإلا لن تتعرف عليها أدوات
+    الفحص مثل x402scan / mppscan.
+    """
+    resource_url = f"{SERVICE_URL}{resource_path}"
     return JSONResponse(
         status_code=402,
-        headers={
-            "X-PAYMENT-REQUIREMENTS": json.dumps({
-                "x402Version": 2,
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "solana",
-                    "asset": "USDC",
-                    "maxAmountRequired": 10000,
-                    "description": "0.01 USDC per message"
-                }],
-                "resource": resource_path,
-                "recipient": PAYMENT_RECIPIENT
-            }),
-            "X-PAYMENT-VERSION": "2"
-        },
         content={
-            "error": "Payment Required",
-            "amount": "0.01",
-            "currency": "USDC",
-            "recipient": PAYMENT_RECIPIENT,
-            "network": "solana"
+            "x402Version": 1,
+            "accepts": [{
+                "scheme": "exact",
+                "network": "solana",
+                "maxAmountRequired": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
+                "resource": resource_url,
+                "description": description,
+                "mimeType": "application/json",
+                "payTo": PAYMENT_RECIPIENT,
+                "asset": USDC_MINT_SOLANA,
+                "maxTimeoutSeconds": 60
+            }]
         }
     )
 
@@ -246,11 +248,15 @@ async def x402_discovery():
         # تم تصحيح الرابط: يجب أن يشير إلى رابط النشر الفعلي على Render
         "servers": [{"url": SERVICE_URL}],
         "resources": [{
+            "resource": f"{SERVICE_URL}/api/v1/telegram/send",
             "path": "/api/v1/telegram/send",
             "method": "POST",
-            "price": "0.01",
-            "price_unit": "USDC",
-            "network": "solana"
+            "scheme": "exact",
+            "network": "solana",
+            "maxAmountRequired": "10000",
+            "asset": USDC_MINT_SOLANA,
+            "payTo": PAYMENT_RECIPIENT,
+            "description": "0.01 USDC per message"
         }],
         "x402_required": True,
         "openapi_document": "/.well-known/openapi.json"
@@ -297,6 +303,12 @@ async def terms_page():
 @app.get("/privacy-short")
 async def privacy_page():
     return {"message": "Privacy Policy Summary for TelAgent"}
+
+@app.options("/{full_path:path}")
+async def catch_all_options(full_path: str):
+    # يمنع رد 405 على طلبات OPTIONS الاستكشافية التي قد ترسلها أدوات
+    # الفحص (x402scan / mppscan) على أي مسار غير معرّف صراحة
+    return JSONResponse(status_code=200, content={"ok": True})
 
 @app.get("/home", response_class=HTMLResponse)
 async def home_ui():
