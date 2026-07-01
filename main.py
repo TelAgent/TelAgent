@@ -85,12 +85,10 @@ SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 
 def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
     """
-    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2).
-    الفروقات الجوهرية عن v1:
-      - "amount" بدل "maxAmountRequired"
-      - كائن "resource" منفصل بالمستوى الأعلى (url/description/mimeType)
-      - "network" بصيغة CAIP-2 مثل "solana:5eykt4..."
-      - حقل "extensions" مطلوب بالمستوى الأعلى
+    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2)،
+    متضمنًا امتداد Bazaar للاكتشاف (extensions.bazaar.info) الذي يصف
+    شكل الطلب (input) والاستجابة (output) — وهو مطلوب لعدّ المورد
+    "صالحًا" لدى بعض أدوات الفهرسة، وليس كافياً أن يكون extensions فارغًا.
     """
     resource_url = f"{SERVICE_URL}{resource_path}"
     return JSONResponse(
@@ -115,7 +113,34 @@ def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC 
                     "version": "2"
                 }
             }],
-            "extensions": {}
+            "extensions": {
+                "bazaar": {
+                    "info": {
+                        "input": {
+                            "type": "http",
+                            "method": "POST",
+                            "bodySchema": {
+                                "type": "object",
+                                "properties": {
+                                    "to": {"type": "string", "description": "Telegram chat ID"},
+                                    "message": {"type": "string", "description": "Message text"},
+                                    "agent_wallet": {"type": "string", "description": "Payer wallet address"}
+                                },
+                                "required": ["to", "message", "agent_wallet"]
+                            }
+                        },
+                        "output": {
+                            "type": "json",
+                            "example": {
+                                "success": True,
+                                "message_id": 123456,
+                                "payment_verified": True,
+                                "cost": "0.01 USDC"
+                            }
+                        }
+                    }
+                }
+            }
         }
     )
 
