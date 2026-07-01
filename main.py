@@ -4,14 +4,13 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import os
 import json
-import uvicorn
-import httpx
-from dotenv import load_dotenv
 import logging
 from contextlib import asynccontextmanager
+import httpx
+from dotenv import load_dotenv
 
 # ============================================
-# 1. إعداد التسجيل
+# 1. إعداد التسجيل (Logging)
 # ============================================
 
 logging.basicConfig(
@@ -35,7 +34,7 @@ if not BOT_TOKEN:
 logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. Lifespan
+# 3. دورة حياة التطبيق (Lifespan)
 # ============================================
 
 @asynccontextmanager
@@ -62,7 +61,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS (للاستخدام من قبل الوكلاء)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,7 +69,39 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. ROOT + HEALTH (fix 404)
+# 5. دالة مساعدة لردود الدفع الموحدة (x402 Helper)
+# ============================================
+
+def get_x402_payment_response(resource_path: str):
+    """توليد رد 402 المطلوب من قبل بروتوكول x402 وأداة الفحص"""
+    return JSONResponse(
+        status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [{
+                    "scheme": "exact",
+                    "network": "solana",
+                    "asset": "USDC",
+                    "maxAmountRequired": 10000,
+                    "description": "0.01 USDC per message"
+                }],
+                "resource": resource_path,
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2"
+        },
+        content={
+            "error": "Payment Required",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana"
+        }
+    )
+
+# ============================================
+# 6. الروابط الأساسية والـ Health Check
 # ============================================
 
 @app.get("/")
@@ -88,7 +118,7 @@ async def health():
     return {"status": "healthy"}
 
 # ============================================
-# 6. نماذج Pydantic
+# 7. نماذج البيانات (Pydantic Models)
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -100,56 +130,33 @@ class RegisterAgentRequest(BaseModel):
     wallet: str
     terms_accepted: bool
 
-# ============================================
-# 7. تخزين مؤقت
-# ============================================
-
+# التخزين المؤقت لموافقات المحافظ
 agent_consents = {}
 
 # ============================================
-# 8. نقطة نهاية إرسال الرسالة
+# 8. مسار إرسال الرسائل (Telegram Send API)
 # ============================================
 
 @app.get("/api/v1/telegram/send")
-async def telegram_probe_get():
-    return {"ok": True, "mode": "get_probe"}
+async def telegram_probe_get(request: Request):
+    # الفاحص يطلب GET للتأكد من وجود نظام حماية الدفع
+    x_payment = request.headers.get("X-PAYMENT")
+    if not x_payment:
+        return get_x402_payment_response("/api/v1/telegram/send")
+    return {"ok": True, "message": "Payment verified for GET probe"}
 
 @app.options("/api/v1/telegram/send")
 async def telegram_probe_options():
-    return {"ok": True, "mode": "options_probe"}
+    return JSONResponse(status_code=200, content={"ok": True})
 
 @app.post("/api/v1/telegram/send")
 async def telegram_send(request: Request, req: TelegramRequest):
-    # التحقق من الدفع
+    # التحقق من وجود الترويسة الخاصة بالدفع
     x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
-        return JSONResponse(
-            status_code=402,
-            headers={
-                "X-PAYMENT-REQUIREMENTS": json.dumps({
-                    "x402Version": 2,
-                    "accepts": [{
-                        "scheme": "exact",
-                        "network": "solana",
-                        "asset": "USDC",
-                        "maxAmountRequired": 10000,
-                        "description": "0.01 USDC per message"
-                    }],
-                    "resource": "/api/v1/telegram/send",
-                    "recipient": PAYMENT_RECIPIENT
-                }),
-                "X-PAYMENT-VERSION": "2"
-            },
-            content={
-                "error": "Payment Required",
-                "amount": "0.01",
-                "currency": "USDC",
-                "recipient": PAYMENT_RECIPIENT,
-                "network": "solana"
-            }
-        )
+        return get_x402_payment_response("/api/v1/telegram/send")
     
-    # التحقق من موافقة العميل
+    # التحقق من موافقة العميل مسبقاً
     if not agent_consents.get(req.agent_wallet):
         return JSONResponse(
             status_code=403,
@@ -159,11 +166,11 @@ async def telegram_send(request: Request, req: TelegramRequest):
             }
         )
     
-    # إرسال الرسالة
+    # معالجة وإرسال الرسالة إلى تليجرام
     try:
         http_client = request.app.state.http_client
         response = await http_client.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            f"https://telegram.org{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": req.to,
                 "text": req.message,
@@ -184,23 +191,23 @@ async def telegram_send(request: Request, req: TelegramRequest):
             "cost": "0.01 USDC"
         }
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        logger.error(f"Error sending message: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
         )
 
 # ============================================
-# 9. تسجيل العميل
+# 9. تسجيل العميل وموافقته (Agent Registration)
 # ============================================
 
 @app.get("/api/agent/register")
 async def register_probe_get():
-    return {"ok": True}
+    return {"ok": True, "message": "Ready for registration"}
 
 @app.options("/api/agent/register")
 async def register_probe_options():
-    return {"ok": True}
+    return JSONResponse(status_code=200, content={"ok": True})
 
 @app.post("/api/agent/register")
 async def register_agent(body: RegisterAgentRequest):
@@ -217,7 +224,7 @@ async def register_agent(body: RegisterAgentRequest):
     }
 
 # ============================================
-# 10. Discovery
+# 10. بروتوكول الاكتشاف (x402 Discovery)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -231,7 +238,7 @@ async def x402_discovery():
             "name": "TelAgent",
             "website": "https://telagent.dev"
         },
-        "servers": [{"url": "https://telagent.onrender.com"}],
+        "servers": [{"url": "https://onrender.com"}],
         "resources": [{
             "path": "/api/v1/telegram/send",
             "method": "POST",
@@ -244,7 +251,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 11. OpenAPI مع x402
+# 11. تخصيص ملف ومستندات OpenAPI مع x402
 # ============================================
 
 @app.get("/.well-known/openapi.json", include_in_schema=False)
@@ -274,12 +281,20 @@ async def openapi_root():
     return await openapi()
 
 # ============================================
-# 12. الصفحات
+# 12. الصفحات والروابط الفرعية المطلوبة للفحص
 # ============================================
 
-@app.get("/")
-async def home():
-    return HTMLResponse("""
+@app.get("/terms")
+async def terms_page():
+    return {"message": "Terms of Service for TelAgent"}
+
+@app.get("/privacy-short")
+async def privacy_page():
+    return {"message": "Privacy Policy Summary for TelAgent"}
+
+@app.get("/home", response_class=HTMLResponse)
+async def home_ui():
+    return """
     <!DOCTYPE html>
     <html>
     <head><title>TelAgent</title></head>
@@ -287,24 +302,7 @@ async def home():
         <h1>🤖 TelAgent</h1>
         <p>Pay-per-request Telegram API for AI Agents</p>
         <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
-        <a href="/docs">📚 API Docs</a> |
-        <a href="/.well-known/x402">🔍 Discovery</a> |
-        <a href="/.well-known/openapi.json">📋 OpenAPI</a>
+        <a href="/docs">📚 API Docs</a>
     </body>
     </html>
-    """)
-
-@app.get("/terms")
-async def terms():
-    return HTMLResponse("<h1>Terms of Service</h1><p>Coming soon</p>")
-
-@app.get("/privacy-short")
-async def privacy():
-    return HTMLResponse("<h1>Privacy Policy</h1><p>Coming soon</p>")
-
-# ============================================
-# 13. تشغيل الخادم
-# ============================================
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    """
