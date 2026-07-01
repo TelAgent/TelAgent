@@ -10,7 +10,7 @@ import httpx
 from dotenv import load_dotenv
 
 # ============================================
-# 1. إعداد التسجيل
+# 1. إعداد التسجيل (Logging)
 # ============================================
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ if not BOT_TOKEN:
 logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. دورة حياة التطبيق
+# 3. دورة حياة التطبيق (Lifespan)
 # ============================================
 
 @asynccontextmanager
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ HTTP client closed")
 
 # ============================================
-# 4. تطبيق FastAPI
+# 4. تطبيق FastAPI مع CORS
 # ============================================
 
 app = FastAPI(
@@ -72,7 +72,7 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. تعريف OpenAPI مخصص (يتجاوز التلقائي)
+# 5. تعريف OpenAPI المخصص (CUSTOM_OPENAPI)
 # ============================================
 
 CUSTOM_OPENAPI = {
@@ -180,7 +180,7 @@ CUSTOM_OPENAPI = {
 }
 
 # ============================================
-# 6. دالة رد 402
+# 6. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -232,7 +232,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 8. تسجيل العميل
+# 8. تسجيل العميل (مجاني)
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -314,7 +314,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 10. Discovery
+# 10. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -341,7 +341,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 11. OpenAPI (يستخدم النسخة المخصصة)
+# 11. OpenAPI (يعيد CUSTOM_OPENAPI)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
