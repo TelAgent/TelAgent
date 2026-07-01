@@ -195,11 +195,24 @@ async def telegram_probe_options():
     return JSONResponse(status_code=200, content={"ok": True})
 
 @app.post("/api/v1/telegram/send")
-async def telegram_send(request: Request, req: TelegramRequest):
-    # التحقق من وجود الترويسة الخاصة بالدفع (v2 ثم v1 كخيار احتياطي)
+async def telegram_send(request: Request):
+    # التحقق من وجود ترويسة الدفع أولاً — قبل أي تحقق من صحة الـ body.
+    # هذا مهم جداً لمطابقة مواصفات x402: أي طلب غير مدفوع يجب أن يحصل
+    # على 402 دائماً، حتى لو كان الـ body ناقصاً أو غير صالح — وليس 422،
+    # وإلا فإن أدوات الفحص (مثل x402scan) لن تتعرف على المورد كـ "مدفوع".
     x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
+
+    # الآن بعد التأكد من وجود الدفع، نتحقق من صحة الـ body يدوياً
+    try:
+        raw_body = await request.json()
+        req = TelegramRequest(**raw_body)
+    except Exception:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "Invalid request body", "required_fields": ["to", "message", "agent_wallet"]}
+        )
 
     # التحقق من موافقة العميل مسبقاً
     if not agent_consents.get(req.agent_wallet):
