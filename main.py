@@ -27,14 +27,9 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
-
-# رابط الخدمة الفعلي على Render — اضبطه في متغيرات البيئة على Render
-# ليطابق دائمًا رابط النشر الحقيقي (مثال: https://telagent.onrender.com)
 SERVICE_URL = os.getenv("SERVICE_URL", "https://telagent.onrender.com")
-
-# عنوان عملة USDC الرسمي على شبكة Solana (mainnet) — هذا هو "asset" المطلوب
-# في مواصفات x402، وليس النص "USDC" فقط
 USDC_MINT_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
@@ -42,7 +37,7 @@ if not BOT_TOKEN:
 logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. دورة حياة التطبيق (Lifespan)
+# 3. دورة حياة التطبيق
 # ============================================
 
 @asynccontextmanager
@@ -77,92 +72,80 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. دالة مساعدة لردود الدفع الموحدة (x402 Helper)
+# 5. دالة رد 402 (x402 v2)
 # ============================================
 
-# معرّف شبكة Solana mainnet بصيغة CAIP-2 كما يتطلبه x402 v2
-SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-
-def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
-    """
-    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2)،
-    متضمنًا امتداد Bazaar للاكتشاف (extensions.bazaar.info) الذي يصف
-    شكل الطلب (input) والاستجابة (output) — وهو مطلوب لعدّ المورد
-    "صالحًا" لدى بعض أدوات الفهرسة، وليس كافياً أن يكون extensions فارغًا.
-    """
-    resource_url = f"{SERVICE_URL}{resource_path}"
+def get_x402_payment_response():
     return JSONResponse(
         status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [{
+                    "scheme": "exact",
+                    "network": SOLANA_MAINNET_CAIP2,
+                    "amount": "10000",
+                    "asset": USDC_MINT_SOLANA,
+                    "payTo": PAYMENT_RECIPIENT,
+                    "maxTimeoutSeconds": 60
+                }],
+                "resource": f"{SERVICE_URL}/api/v1/telegram/send",
+                "description": "0.01 USDC per Telegram message"
+            }),
+            "X-PAYMENT-VERSION": "2"
+        },
         content={
-            "x402Version": 2,
-            "error": "PAYMENT-SIGNATURE header is required",
-            "resource": {
-                "url": resource_url,
-                "description": description,
-                "mimeType": "application/json"
-            },
-            "accepts": [{
-                "scheme": "exact",
-                "network": SOLANA_MAINNET_CAIP2,
-                "amount": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
-                "asset": USDC_MINT_SOLANA,
-                "payTo": PAYMENT_RECIPIENT,
-                "maxTimeoutSeconds": 60,
-                "extra": {
-                    "name": "USD Coin",
-                    "version": "2"
-                }
-            }],
-            "extensions": {
-                "bazaar": {
-                    "info": {
-                        "input": {
-                            "type": "http",
-                            "method": "POST",
-                            "bodySchema": {
-                                "type": "object",
-                                "properties": {
-                                    "to": {"type": "string", "description": "Telegram chat ID"},
-                                    "message": {"type": "string", "description": "Message text"},
-                                    "agent_wallet": {"type": "string", "description": "Payer wallet address"}
-                                },
-                                "required": ["to", "message", "agent_wallet"]
-                            }
-                        },
-                        "output": {
-                            "type": "json",
-                            "example": {
-                                "success": True,
-                                "message_id": 123456,
-                                "payment_verified": True,
-                                "cost": "0.01 USDC"
-                            }
-                        }
-                    }
-                }
-            }
+            "error": "Payment Required",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana"
         }
     )
 
 # ============================================
-# 6. الروابط الأساسية والـ Health Check
+# 6. نقاط النهاية المجانية (security: [])
 # ============================================
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 async def root():
-    return {
-        "status": "ok",
-        "service": "telagent",
-        "version": "1.0.0",
-        "message": "API is running"
-    }
+    return {"status": "ok", "service": "telagent", "version": "1.0.0"}
 
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.get("/health")
 async def health():
     return {"status": "healthy"}
 
+@app.get("/terms")
+async def terms():
+    return {"message": "Terms of Service"}
+
+@app.get("/privacy-short")
+async def privacy():
+    return {"message": "Privacy Policy"}
+
 # ============================================
-# 7. نماذج البيانات (Pydantic Models)
+# 7. تسجيل العميل (مجاني)
+# ============================================
+
+class RegisterAgentRequest(BaseModel):
+    wallet: str
+    terms_accepted: bool
+
+agent_consents = {}
+
+@app.get("/api/agent/register")
+async def register_probe_get():
+    return {"ok": True}
+
+@app.post("/api/agent/register")
+async def register_agent(body: RegisterAgentRequest):
+    if not body.terms_accepted:
+        return JSONResponse(status_code=400, content={"error": "Terms not accepted"})
+    agent_consents[body.wallet] = True
+    return {"success": True, "wallet": body.wallet, "consent": True}
+
+# ============================================
+# 8. نقطة الدفع الرئيسية (مع x402)
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -170,25 +153,12 @@ class TelegramRequest(BaseModel):
     message: str
     agent_wallet: str
 
-class RegisterAgentRequest(BaseModel):
-    wallet: str
-    terms_accepted: bool
-
-# التخزين المؤقت لموافقات المحافظ
-agent_consents = {}
-
-# ============================================
-# 8. مسار إرسال الرسائل (Telegram Send API)
-# ============================================
-
-@app.api_route("/api/v1/telegram/send", methods=["GET", "HEAD"])
+@app.get("/api/v1/telegram/send")
 async def telegram_probe_get(request: Request):
-    # الفاحص يطلب GET للتأكد من وجود نظام حماية الدفع
-    # ندعم ترويسة v2 (PAYMENT-SIGNATURE) وأيضاً v1 (X-PAYMENT) للتوافق
-    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
+    x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
-        return get_x402_payment_response("/api/v1/telegram/send")
-    return {"ok": True, "message": "Payment verified for GET probe"}
+        return get_x402_payment_response()
+    return {"ok": True}
 
 @app.options("/api/v1/telegram/send")
 async def telegram_probe_options():
@@ -196,53 +166,34 @@ async def telegram_probe_options():
 
 @app.post("/api/v1/telegram/send")
 async def telegram_send(request: Request):
-    # التحقق من وجود ترويسة الدفع أولاً — قبل أي تحقق من صحة الـ body.
-    # هذا مهم جداً لمطابقة مواصفات x402: أي طلب غير مدفوع يجب أن يحصل
-    # على 402 دائماً، حتى لو كان الـ body ناقصاً أو غير صالح — وليس 422،
-    # وإلا فإن أدوات الفحص (مثل x402scan) لن تتعرف على المورد كـ "مدفوع".
-    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
+    x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
-        return get_x402_payment_response("/api/v1/telegram/send")
+        return get_x402_payment_response()
 
-    # الآن بعد التأكد من وجود الدفع، نتحقق من صحة الـ body يدوياً
     try:
         raw_body = await request.json()
         req = TelegramRequest(**raw_body)
     except Exception:
         return JSONResponse(
             status_code=422,
-            content={"error": "Invalid request body", "required_fields": ["to", "message", "agent_wallet"]}
+            content={"error": "Invalid body", "required": ["to", "message", "agent_wallet"]}
         )
 
-    # التحقق من موافقة العميل مسبقاً
     if not agent_consents.get(req.agent_wallet):
         return JSONResponse(
             status_code=403,
-            content={
-                "error": "Consent Required",
-                "action": "register at /api/agent/register"
-            }
+            content={"error": "Consent Required", "action": "register at /api/agent/register"}
         )
 
-    # معالجة وإرسال الرسالة إلى تليجرام
     try:
         http_client = request.app.state.http_client
-        # تم تصحيح الرابط: يجب أن يكون api.telegram.org/bot<TOKEN>/...
         response = await http_client.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": req.to,
-                "text": req.message,
-                "parse_mode": "Markdown"
-            }
+            json={"chat_id": req.to, "text": req.message, "parse_mode": "Markdown"}
         )
         if response.status_code != 200:
-            return JSONResponse(
-                status_code=500,
-                content={"error": response.text}
-            )
+            return JSONResponse(status_code=500, content={"error": response.text})
         data = response.json()
-        logger.info(f"✅ Message sent to {req.to}")
         return {
             "success": True,
             "message_id": data["result"]["message_id"],
@@ -250,57 +201,22 @@ async def telegram_send(request: Request):
             "cost": "0.01 USDC"
         }
     except Exception as e:
-        logger.error(f"Error sending message: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 9. تسجيل العميل وموافقته (Agent Registration)
+# 9. Discovery (x402)
 # ============================================
 
-@app.api_route("/api/agent/register", methods=["GET", "HEAD"])
-async def register_probe_get():
-    return {"ok": True, "message": "Ready for registration"}
-
-@app.options("/api/agent/register")
-async def register_probe_options():
-    return JSONResponse(status_code=200, content={"ok": True})
-
-@app.post("/api/agent/register")
-async def register_agent(body: RegisterAgentRequest):
-    if not body.terms_accepted:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Terms not accepted"}
-        )
-    agent_consents[body.wallet] = True
-    return {
-        "success": True,
-        "wallet": body.wallet,
-        "consent": True
-    }
-
-# ============================================
-# 10. بروتوكول الاكتشاف (x402 Discovery)
-# ============================================
-
-@app.api_route("/.well-known/x402", methods=["GET", "HEAD"])
+@app.get("/.well-known/x402")
 async def x402_discovery():
     return {
         "version": "1.0",
         "identifier": "telagent",
         "name": "TelAgent",
-        "description": "Telegram API for AI Agents with x402 payments",
-        "owner": {
-            "name": "TelAgent",
-            "website": "https://telagent.dev"
-        },
-        # تم تصحيح الرابط: يجب أن يشير إلى رابط النشر الفعلي على Render
+        "description": "Telegram API with x402 payments",
+        "owner": {"name": "TelAgent", "website": "https://telagent.dev"},
         "servers": [{"url": SERVICE_URL}],
         "resources": [{
-            "resource": f"{SERVICE_URL}/api/v1/telegram/send",
             "path": "/api/v1/telegram/send",
             "method": "POST",
             "scheme": "exact",
@@ -311,79 +227,85 @@ async def x402_discovery():
             "description": "0.01 USDC per message"
         }],
         "x402_required": True,
-        "openapi_document": "/.well-known/openapi.json"
+        "openapi_document": "/openapi.json"
     }
 
 # ============================================
-# 11. تخصيص ملف ومستندات OpenAPI مع x402
+# 10. OpenAPI (متوافق مع x402scan)
 # ============================================
-
-@app.get("/.well-known/openapi.json", include_in_schema=False)
-async def openapi():
-    schema = app.openapi()
-
-    schema.setdefault("components", {})
-    schema["components"].setdefault("securitySchemes", {})
-    schema["components"]["securitySchemes"]["x402"] = {
-        "type": "http",
-        "scheme": "x402"
-    }
-
-    path = "/api/v1/telegram/send"
-    if path in schema.get("paths", {}):
-        for method in schema["paths"][path]:
-            schema["paths"][path][method]["security"] = [{"x402": []}]
-            schema["paths"][path][method]["x402"] = {
-                "price": 0.01,
-                "currency": "USDC"
-            }
-
-    return JSONResponse(schema)
 
 @app.get("/openapi.json", include_in_schema=False)
-async def openapi_root():
-    return await openapi()
+async def openapi():
+    schema = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "TelAgent API",
+            "version": "1.0.0",
+            "description": "Telegram API for AI Agents with x402 payments",
+            "contact": {"email": "legal@telagent.dev"},
+            "x-guidance": "Use POST /api/v1/telegram/send with {to, message, agent_wallet}. Requires x402 payment."
+        },
+        "paths": {
+            "/api/v1/telegram/send": {
+                "post": {
+                    "summary": "Send a Telegram message",
+                    "operationId": "sendTelegram",
+                    "x-payment-info": {
+                        "price": {"mode": "fixed", "currency": "USD", "amount": "0.010000"},
+                        "protocols": [{"x402": {}}]
+                    },
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "to": {"type": "string", "description": "Telegram chat ID"},
+                                        "message": {"type": "string", "description": "Message content"},
+                                        "agent_wallet": {"type": "string", "description": "Agent wallet address"}
+                                    },
+                                    "required": ["to", "message", "agent_wallet"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {"description": "Message sent successfully"},
+                        "402": {"description": "Payment Required"}
+                    }
+                }
+            },
+            "/api/agent/register": {
+                "post": {
+                    "summary": "Register an agent",
+                    "security": [],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "wallet": {"type": "string"},
+                                        "terms_accepted": {"type": "boolean"}
+                                    },
+                                    "required": ["wallet", "terms_accepted"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": {"200": {"description": "Success"}}
+                }
+            }
+        }
+    }
+    return JSONResponse(schema)
 
 # ============================================
-# مسار تصحيح مؤقت — لعرض محتوى رد الدفع 402 بحالة 200 للفحص فقط.
-# احذف هذا المسار بعد الانتهاء من التشخيص.
+# 11. تشغيل الخادم
 # ============================================
 
-@app.get("/debug/x402-preview", include_in_schema=False)
-async def debug_x402_preview():
-    preview = get_x402_payment_response("/api/v1/telegram/send")
-    body = json.loads(bytes(preview.body).decode("utf-8"))
-    return JSONResponse(status_code=200, content=body)
-
-# ============================================
-# 12. الصفحات والروابط الفرعية المطلوبة للفحص
-# ============================================
-
-@app.api_route("/terms", methods=["GET", "HEAD"])
-async def terms_page():
-    return {"message": "Terms of Service for TelAgent"}
-
-@app.api_route("/privacy-short", methods=["GET", "HEAD"])
-async def privacy_page():
-    return {"message": "Privacy Policy Summary for TelAgent"}
-
-@app.options("/{full_path:path}", include_in_schema=False)
-async def catch_all_options(full_path: str):
-    # يمنع رد 405 على طلبات OPTIONS الاستكشافية التي قد ترسلها أدوات
-    # الفحص (x402scan / mppscan) على أي مسار غير معرّف صراحة
-    return JSONResponse(status_code=200, content={"ok": True})
-
-@app.api_route("/home", methods=["GET", "HEAD"], response_class=HTMLResponse)
-async def home_ui():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head><title>TelAgent</title></head>
-    <body>
-        <h1>🤖 TelAgent</h1>
-        <p>Pay-per-request Telegram API for AI Agents</p>
-        <p>⚡ x402 Protocol | 🌐 Solana | 📱 Telegram</p>
-        <a href="/docs">📚 API Docs</a>
-    </body>
-    </html>
-    """
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
