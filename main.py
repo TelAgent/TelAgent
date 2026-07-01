@@ -10,7 +10,7 @@ import httpx
 from dotenv import load_dotenv
 
 # ============================================
-# 1. إعداد التسجيل (Logging)
+# 1. إعداد التسجيل
 # ============================================
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ if not BOT_TOKEN:
 logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. دورة حياة التطبيق (Lifespan)
+# 3. دورة حياة التطبيق
 # ============================================
 
 @asynccontextmanager
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ HTTP client closed")
 
 # ============================================
-# 4. تطبيق FastAPI مع CORS
+# 4. تطبيق FastAPI
 # ============================================
 
 app = FastAPI(
@@ -72,7 +72,115 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. دالة توليد رد 402
+# 5. تعريف OpenAPI مخصص (يتجاوز التلقائي)
+# ============================================
+
+CUSTOM_OPENAPI = {
+    "openapi": "3.1.0",
+    "info": {
+        "title": "TelAgent API",
+        "version": "1.0.0",
+        "description": "Telegram API for AI Agents with x402 payments",
+        "contact": {"email": "legal@telagent.dev"},
+        "x-guidance": "Use POST /api/v1/telegram/send. Requires x402 payment with X-PAYMENT header."
+    },
+    "paths": {
+        "/api/v1/telegram/send": {
+            "post": {
+                "summary": "Send a Telegram message",
+                "operationId": "sendTelegram",
+                "x-payment-info": {
+                    "price": {"mode": "fixed", "currency": "USD", "amount": "0.010000"},
+                    "protocols": [{"x402": {}}]
+                },
+                "security": [{"x402": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "to": {"type": "string", "description": "Telegram chat ID"},
+                                    "message": {"type": "string", "description": "Message content"},
+                                    "agent_wallet": {"type": "string", "description": "Agent wallet address"}
+                                },
+                                "required": ["to", "message", "agent_wallet"]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {"description": "Message sent successfully"},
+                    "402": {"description": "Payment Required"}
+                }
+            }
+        },
+        "/api/agent/register": {
+            "post": {
+                "summary": "Register an agent",
+                "security": [],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "wallet": {"type": "string"},
+                                    "terms_accepted": {"type": "boolean"}
+                                },
+                                "required": ["wallet", "terms_accepted"]
+                            }
+                        }
+                    }
+                },
+                "responses": {"200": {"description": "Success"}}
+            }
+        },
+        "/": {
+            "get": {
+                "summary": "Root",
+                "security": [],
+                "responses": {"200": {"description": "OK"}}
+            }
+        },
+        "/health": {
+            "get": {
+                "summary": "Health",
+                "security": [],
+                "responses": {"200": {"description": "OK"}}
+            }
+        },
+        "/terms": {
+            "get": {
+                "summary": "Terms",
+                "security": [],
+                "responses": {"200": {"description": "OK"}}
+            }
+        },
+        "/privacy-short": {
+            "get": {
+                "summary": "Privacy",
+                "security": [],
+                "responses": {"200": {"description": "OK"}}
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "x402": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-PAYMENT",
+                "description": "x402 payment signature"
+            }
+        }
+    }
+}
+
+# ============================================
+# 6. دالة رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -104,7 +212,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 6. نقاط النهاية المجانية
+# 7. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -124,7 +232,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 7. تسجيل العميل
+# 8. تسجيل العميل
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -145,7 +253,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 8. نقطة الدفع الرئيسية
+# 9. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -206,7 +314,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 9. Discovery (x402)
+# 10. Discovery
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -233,108 +341,19 @@ async def x402_discovery():
     }
 
 # ============================================
-# 10. OpenAPI مع x-payment-info
+# 11. OpenAPI (يستخدم النسخة المخصصة)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi():
-    schema = {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "TelAgent API",
-            "version": "1.0.0",
-            "description": "Telegram API for AI Agents with x402 payments",
-            "contact": {"email": "legal@telagent.dev"},
-            "x-guidance": "Use POST /api/v1/telegram/send. Requires x402 payment with X-PAYMENT header."
-        },
-        "paths": {
-            "/api/v1/telegram/send": {
-                "post": {
-                    "summary": "Send a Telegram message",
-                    "operationId": "sendTelegram",
-                    "x-payment-info": {
-                        "price": {"mode": "fixed", "currency": "USD", "amount": "0.010000"},
-                        "protocols": [{"x402": {}}]
-                    },
-                    "security": [{"x402": []}],
-                    "requestBody": {
-                        "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "to": {"type": "string", "description": "Telegram chat ID"},
-                                        "message": {"type": "string", "description": "Message content"},
-                                        "agent_wallet": {"type": "string", "description": "Agent wallet address"}
-                                    },
-                                    "required": ["to", "message", "agent_wallet"]
-                                }
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": {"description": "Message sent successfully"},
-                        "402": {"description": "Payment Required"}
-                    }
-                }
-            },
-            "/api/agent/register": {
-                "post": {
-                    "summary": "Register an agent",
-                    "security": [],
-                    "requestBody": {
-                        "required": True,
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "wallet": {"type": "string"},
-                                        "terms_accepted": {"type": "boolean"}
-                                    },
-                                    "required": ["wallet", "terms_accepted"]
-                                }
-                            }
-                        }
-                    },
-                    "responses": {"200": {"description": "Success"}}
-                }
-            },
-            "/": {
-                "get": {
-                    "summary": "Root",
-                    "security": [],
-                    "responses": {"200": {"description": "OK"}}
-                }
-            },
-            "/health": {
-                "get": {
-                    "summary": "Health",
-                    "security": [],
-                    "responses": {"200": {"description": "OK"}}
-                }
-            },
-            "/terms": {
-                "get": {
-                    "summary": "Terms",
-                    "security": [],
-                    "responses": {"200": {"description": "OK"}}
-                }
-            },
-            "/privacy-short": {
-                "get": {
-                    "summary": "Privacy",
-                    "security": [],
-                    "responses": {"200": {"description": "OK"}}
-                }
-            }
-        }
-    }
-    return JSONResponse(schema)
+    return JSONResponse(CUSTOM_OPENAPI)
+
+@app.get("/.well-known/openapi.json", include_in_schema=False)
+async def well_known_openapi():
+    return JSONResponse(CUSTOM_OPENAPI)
 
 # ============================================
-# 11. التشغيل
+# 12. التشغيل
 # ============================================
 
 if __name__ == "__main__":
