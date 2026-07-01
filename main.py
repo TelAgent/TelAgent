@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 import os
 import json
@@ -10,7 +10,7 @@ import httpx
 from dotenv import load_dotenv
 
 # ============================================
-# 1. إعداد التسجيل
+# 1. إعداد التسجيل (Logging)
 # ============================================
 
 logging.basicConfig(
@@ -37,7 +37,7 @@ if not BOT_TOKEN:
 logger.info("✅ Environment loaded")
 
 # ============================================
-# 3. دورة حياة التطبيق
+# 3. دورة حياة التطبيق (Lifespan)
 # ============================================
 
 @asynccontextmanager
@@ -72,7 +72,7 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. دالة رد 402
+# 5. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -194,6 +194,7 @@ async def telegram_send(request: Request):
         if response.status_code != 200:
             return JSONResponse(status_code=500, content={"error": response.text})
         data = response.json()
+        logger.info(f"✅ Message sent to {req.to}")
         return {
             "success": True,
             "message_id": data["result"]["message_id"],
@@ -201,10 +202,11 @@ async def telegram_send(request: Request):
             "cost": "0.01 USDC"
         }
     except Exception as e:
+        logger.error(f"Error: {str(e)}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 9. Discovery
+# 9. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -231,7 +233,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 10. OpenAPI المخصص (مع x-payment-info)
+# 10. OpenAPI مع x-payment-info
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -254,6 +256,7 @@ async def openapi():
                         "price": {"mode": "fixed", "currency": "USD", "amount": "0.010000"},
                         "protocols": [{"x402": {}}]
                     },
+                    "security": [{"x402": []}],
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -297,13 +300,41 @@ async def openapi():
                     },
                     "responses": {"200": {"description": "Success"}}
                 }
+            },
+            "/": {
+                "get": {
+                    "summary": "Root",
+                    "security": [],
+                    "responses": {"200": {"description": "OK"}}
+                }
+            },
+            "/health": {
+                "get": {
+                    "summary": "Health",
+                    "security": [],
+                    "responses": {"200": {"description": "OK"}}
+                }
+            },
+            "/terms": {
+                "get": {
+                    "summary": "Terms",
+                    "security": [],
+                    "responses": {"200": {"description": "OK"}}
+                }
+            },
+            "/privacy-short": {
+                "get": {
+                    "summary": "Privacy",
+                    "security": [],
+                    "responses": {"200": {"description": "OK"}}
+                }
             }
         }
     }
     return JSONResponse(schema)
 
 # ============================================
-# 11. تشغيل الخادم
+# 11. التشغيل
 # ============================================
 
 if __name__ == "__main__":
