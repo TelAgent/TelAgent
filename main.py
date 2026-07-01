@@ -180,13 +180,25 @@ CUSTOM_OPENAPI = {
 }
 
 # ============================================
-# 6. تعيين OpenAPI المخصص (هذا هو المفتاح!)
+# 6. تعيين OpenAPI المخصص
 # ============================================
 
 app.openapi_schema = CUSTOM_OPENAPI
 
 # ============================================
-# 7. دالة توليد رد 402
+# 7. نقطة نهاية OpenAPI (للتأكيد)
+# ============================================
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi():
+    return JSONResponse(CUSTOM_OPENAPI)
+
+@app.get("/.well-known/openapi.json", include_in_schema=False)
+async def well_known_openapi():
+    return JSONResponse(CUSTOM_OPENAPI)
+
+# ============================================
+# 8. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -218,7 +230,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 8. نقاط النهاية المجانية
+# 9. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -238,7 +250,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 9. تسجيل العميل (مجاني)
+# 10. تسجيل العميل (مجاني)
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -259,7 +271,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 10. نقطة الدفع الرئيسية
+# 11. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -320,7 +332,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 11. Discovery (x402)
+# 12. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -345,18 +357,6 @@ async def x402_discovery():
         "x402_required": True,
         "openapi_document": "/openapi.json"
     }
-
-# ============================================
-# 12. نقاط نهاية OpenAPI (تعيد المخصص)
-# ============================================
-
-@app.get("/openapi.json", include_in_schema=False)
-async def openapi():
-    return JSONResponse(CUSTOM_OPENAPI)
-
-@app.get("/.well-known/openapi.json", include_in_schema=False)
-async def well_known_openapi():
-    return JSONResponse(CUSTOM_OPENAPI)
 
 # ============================================
 # 13. التشغيل
