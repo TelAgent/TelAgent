@@ -83,7 +83,7 @@ def get_x402_payment_response(resource_path: str):
                     "scheme": "exact",
                     "network": "solana",
                     "asset": "USDC",
-                    "maxAmountRequired": 10000,  # قيمة رقمية صحيحة للفاحص
+                    "maxAmountRequired": 10000,
                     "description": "0.01 USDC per message"
                 }],
                 "resource": resource_path,
@@ -102,21 +102,21 @@ def get_x402_payment_response(resource_path: str):
     )
 
 # ============================================
-# 6. الروابط الأساسية والـ Health Check (مع دعم طرق طلب HEAD)
+# 6. الروابط الأساسية والـ Health Check (تم الإصلاح لـ FastAPI)
 # ============================================
 
-@app.get("/", methods=["GET", "HEAD"])
-async def root():
-    return {
+@app.route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    return JSONResponse({
         "status": "ok",
         "service": "telagent",
         "version": "1.0.0",
         "message": "API is running"
-    }
+    })
 
-@app.get("/health", methods=["GET", "HEAD"])
-async def health():
-    return {"status": "healthy"}
+@app.route("/health", methods=["GET", "HEAD"])
+async def health(request: Request):
+    return JSONResponse({"status": "healthy"})
 
 # ============================================
 # 7. نماذج البيانات (Pydantic Models)
@@ -138,12 +138,12 @@ agent_consents = {}
 # 8. مسار إرسال الرسائل (Telegram Send API)
 # ============================================
 
-@app.get("/api/v1/telegram/send", methods=["GET", "HEAD"])
+@app.route("/api/v1/telegram/send", methods=["GET", "HEAD"])
 async def telegram_probe_get(request: Request):
     x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
-    return {"ok": True, "message": "Payment verified for GET probe"}
+    return JSONResponse({"ok": True, "message": "Payment verified for GET probe"})
 
 @app.options("/api/v1/telegram/send")
 async def telegram_probe_options():
@@ -198,9 +198,9 @@ async def telegram_send(request: Request, req: TelegramRequest):
 # 9. تسجيل العميل وموافقته (Agent Registration)
 # ============================================
 
-@app.get("/api/agent/register", methods=["GET", "HEAD"])
-async def register_probe_get():
-    return {"ok": True, "message": "Ready for registration"}
+@app.route("/api/agent/register", methods=["GET", "HEAD"])
+async def register_probe_get(request: Request):
+    return JSONResponse({"ok": True, "message": "Ready for registration"})
 
 @app.options("/api/agent/register")
 async def register_probe_options():
@@ -224,9 +224,9 @@ async def register_agent(body: RegisterAgentRequest):
 # 10. بروتوكول الاكتشاف (x402 Discovery)
 # ============================================
 
-@app.get("/.well-known/x402", methods=["GET", "HEAD"])
-async def x402_discovery():
-    return {
+@app.route("/.well-known/x402", methods=["GET", "HEAD"])
+async def x402_discovery(request: Request):
+    return JSONResponse({
         "version": "1.0",
         "identifier": "telagent",
         "name": "TelAgent",
@@ -245,7 +245,7 @@ async def x402_discovery():
         }],
         "x402_required": True,
         "openapi_document": "/.well-known/openapi.json"
-    }
+    })
 
 # ============================================
 # 11. تخصيص ملف ومستندات OpenAPI واستبعاد الروابط المجانية
@@ -264,7 +264,6 @@ async def openapi():
     
     paid_path = "/api/v1/telegram/send"
     
-    # حماية المسار المدفوع واستثناء البقية مجانًا لمنع حظر الفحص
     for path in schema.get("paths", {}):
         if path == paid_path:
             for method in schema["paths"][path]:
@@ -287,21 +286,21 @@ async def openapi_root():
 # 12. الصفحات والأيقونات المطلوبة للفحص
 # ============================================
 
-@app.get("/favicon.ico", include_in_schema=False, methods=["GET", "HEAD"])
-async def favicon():
+@app.route("/favicon.ico", methods=["GET", "HEAD"])
+async def favicon(request: Request):
     return JSONResponse(status_code=200, content={})
 
-@app.get("/terms", methods=["GET", "HEAD"])
-async def terms_page():
-    return {"message": "Terms of Service for TelAgent"}
+@app.route("/terms", methods=["GET", "HEAD"])
+async def terms_page(request: Request):
+    return JSONResponse({"message": "Terms of Service for TelAgent"})
 
-@app.get("/privacy-short", methods=["GET", "HEAD"])
-async def privacy_page():
-    return {"message": "Privacy Policy Summary for TelAgent"}
+@app.route("/privacy-short", methods=["GET", "HEAD"])
+async def privacy_page(request: Request):
+    return JSONResponse({"message": "Privacy Policy Summary for TelAgent"})
 
-@app.get("/home", response_class=HTMLResponse, methods=["GET", "HEAD"])
-async def home_ui():
-    return """
+@app.route("/home", methods=["GET", "HEAD"])
+async def home_ui(request: Request):
+    html_content = """
     <!DOCTYPE html>
     <html>
     <head><title>TelAgent</title></head>
@@ -313,3 +312,6 @@ async def home_ui():
     </body>
     </html>
     """
+    if request.method == "HEAD":
+        return HTMLResponse(status_code=200)
+    return HTMLResponse(content=html_content)
