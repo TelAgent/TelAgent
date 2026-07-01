@@ -28,14 +28,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PAYMENT_RECIPIENT = os.getenv("PAYMENT_RECIPIENT_SOLANA")
 
-# رابط الخدمة الفعلي على Render — اضبطه في متغيرات البيئة على Render
-# ليطابق دائمًا رابط النشر الحقيقي (مثال: https://telagent.onrender.com)
-SERVICE_URL = os.getenv("SERVICE_URL", "https://telagent.onrender.com")
-
-# عنوان عملة USDC الرسمي على شبكة Solana (mainnet) — هذا هو "asset" المطلوب
-# في مواصفات x402، وليس النص "USDC" فقط
-USDC_MINT_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
@@ -80,67 +72,32 @@ app.add_middleware(
 # 5. دالة مساعدة لردود الدفع الموحدة (x402 Helper)
 # ============================================
 
-# معرّف شبكة Solana mainnet بصيغة CAIP-2 كما يتطلبه x402 v2
-SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-
-def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
-    """
-    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2)،
-    متضمنًا امتداد Bazaar للاكتشاف (extensions.bazaar.info) الذي يصف
-    شكل الطلب (input) والاستجابة (output) — وهو مطلوب لعدّ المورد
-    "صالحًا" لدى بعض أدوات الفهرسة، وليس كافياً أن يكون extensions فارغًا.
-    """
-    resource_url = f"{SERVICE_URL}{resource_path}"
+def get_x402_payment_response(resource_path: str):
+    """توليد رد 402 متوافق تماماً مع شروط أداة الفحص والتطبيق المباشر"""
     return JSONResponse(
         status_code=402,
+        headers={
+            "X-PAYMENT-REQUIREMENTS": json.dumps({
+                "x402Version": 2,
+                "accepts": [{
+                    "scheme": "exact",
+                    "network": "solana",
+                    "asset": "USDC",
+                    "maxAmountRequired": 10000,  # تأكيد تمرير القيمة كـ Integer رقمي وليس نصاً
+                    "description": "0.01 USDC per message"
+                }],
+                "resource": resource_path,
+                "recipient": PAYMENT_RECIPIENT
+            }),
+            "X-PAYMENT-VERSION": "2",
+            "Access-Control-Expose-Headers": "X-PAYMENT-REQUIREMENTS, X-PAYMENT-VERSION"
+        },
         content={
-            "x402Version": 2,
-            "error": "PAYMENT-SIGNATURE header is required",
-            "resource": {
-                "url": resource_url,
-                "description": description,
-                "mimeType": "application/json"
-            },
-            "accepts": [{
-                "scheme": "exact",
-                "network": SOLANA_MAINNET_CAIP2,
-                "amount": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
-                "asset": USDC_MINT_SOLANA,
-                "payTo": PAYMENT_RECIPIENT,
-                "maxTimeoutSeconds": 60,
-                "extra": {
-                    "name": "USD Coin",
-                    "version": "2"
-                }
-            }],
-            "extensions": {
-                "bazaar": {
-                    "info": {
-                        "input": {
-                            "type": "http",
-                            "method": "POST",
-                            "bodySchema": {
-                                "type": "object",
-                                "properties": {
-                                    "to": {"type": "string", "description": "Telegram chat ID"},
-                                    "message": {"type": "string", "description": "Message text"},
-                                    "agent_wallet": {"type": "string", "description": "Payer wallet address"}
-                                },
-                                "required": ["to", "message", "agent_wallet"]
-                            }
-                        },
-                        "output": {
-                            "type": "json",
-                            "example": {
-                                "success": True,
-                                "message_id": 123456,
-                                "payment_verified": True,
-                                "cost": "0.01 USDC"
-                            }
-                        }
-                    }
-                }
-            }
+            "error": "Payment Required",
+            "amount": "0.01",
+            "currency": "USDC",
+            "recipient": PAYMENT_RECIPIENT,
+            "network": "solana"
         }
     )
 
@@ -148,7 +105,7 @@ def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC 
 # 6. الروابط الأساسية والـ Health Check
 # ============================================
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 async def root():
     return {
         "status": "ok",
@@ -157,7 +114,7 @@ async def root():
         "message": "API is running"
     }
 
-@app.api_route("/health", methods=["GET", "HEAD"])
+@app.get("/health")
 async def health():
     return {"status": "healthy"}
 
@@ -181,11 +138,9 @@ agent_consents = {}
 # 8. مسار إرسال الرسائل (Telegram Send API)
 # ============================================
 
-@app.api_route("/api/v1/telegram/send", methods=["GET", "HEAD"])
+@app.get("/api/v1/telegram/send")
 async def telegram_probe_get(request: Request):
-    # الفاحص يطلب GET للتأكد من وجود نظام حماية الدفع
-    # ندعم ترويسة v2 (PAYMENT-SIGNATURE) وأيضاً v1 (X-PAYMENT) للتوافق
-    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
+    x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
     return {"ok": True, "message": "Payment verified for GET probe"}
@@ -195,26 +150,11 @@ async def telegram_probe_options():
     return JSONResponse(status_code=200, content={"ok": True})
 
 @app.post("/api/v1/telegram/send")
-async def telegram_send(request: Request):
-    # التحقق من وجود ترويسة الدفع أولاً — قبل أي تحقق من صحة الـ body.
-    # هذا مهم جداً لمطابقة مواصفات x402: أي طلب غير مدفوع يجب أن يحصل
-    # على 402 دائماً، حتى لو كان الـ body ناقصاً أو غير صالح — وليس 422،
-    # وإلا فإن أدوات الفحص (مثل x402scan) لن تتعرف على المورد كـ "مدفوع".
-    x_payment = request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
+async def telegram_send(request: Request, req: TelegramRequest):
+    x_payment = request.headers.get("X-PAYMENT")
     if not x_payment:
         return get_x402_payment_response("/api/v1/telegram/send")
-
-    # الآن بعد التأكد من وجود الدفع، نتحقق من صحة الـ body يدوياً
-    try:
-        raw_body = await request.json()
-        req = TelegramRequest(**raw_body)
-    except Exception:
-        return JSONResponse(
-            status_code=422,
-            content={"error": "Invalid request body", "required_fields": ["to", "message", "agent_wallet"]}
-        )
-
-    # التحقق من موافقة العميل مسبقاً
+    
     if not agent_consents.get(req.agent_wallet):
         return JSONResponse(
             status_code=403,
@@ -223,13 +163,11 @@ async def telegram_send(request: Request):
                 "action": "register at /api/agent/register"
             }
         )
-
-    # معالجة وإرسال الرسالة إلى تليجرام
+    
     try:
         http_client = request.app.state.http_client
-        # تم تصحيح الرابط: يجب أن يكون api.telegram.org/bot<TOKEN>/...
         response = await http_client.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            f"https://telegram.org{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": req.to,
                 "text": req.message,
@@ -260,7 +198,7 @@ async def telegram_send(request: Request):
 # 9. تسجيل العميل وموافقته (Agent Registration)
 # ============================================
 
-@app.api_route("/api/agent/register", methods=["GET", "HEAD"])
+@app.get("/api/agent/register")
 async def register_probe_get():
     return {"ok": True, "message": "Ready for registration"}
 
@@ -286,7 +224,7 @@ async def register_agent(body: RegisterAgentRequest):
 # 10. بروتوكول الاكتشاف (x402 Discovery)
 # ============================================
 
-@app.api_route("/.well-known/x402", methods=["GET", "HEAD"])
+@app.get("/.well-known/x402")
 async def x402_discovery():
     return {
         "version": "1.0",
@@ -297,47 +235,48 @@ async def x402_discovery():
             "name": "TelAgent",
             "website": "https://telagent.dev"
         },
-        # تم تصحيح الرابط: يجب أن يشير إلى رابط النشر الفعلي على Render
-        "servers": [{"url": SERVICE_URL}],
+        "servers": [{"url": "https://onrender.com"}],
         "resources": [{
-            "resource": f"{SERVICE_URL}/api/v1/telegram/send",
             "path": "/api/v1/telegram/send",
             "method": "POST",
-            "scheme": "exact",
-            "network": SOLANA_MAINNET_CAIP2,
-            "amount": "10000",
-            "asset": USDC_MINT_SOLANA,
-            "payTo": PAYMENT_RECIPIENT,
-            "description": "0.01 USDC per message"
+            "price": "0.01",
+            "price_unit": "USDC",
+            "network": "solana"
         }],
         "x402_required": True,
         "openapi_document": "/.well-known/openapi.json"
     }
 
 # ============================================
-# 11. تخصيص ملف ومستندات OpenAPI مع x402
+# 11. تخصيص ملف ومستندات OpenAPI واستبعاد الروابط المجانية
 # ============================================
 
 @app.get("/.well-known/openapi.json", include_in_schema=False)
 async def openapi():
     schema = app.openapi()
-
+    
     schema.setdefault("components", {})
     schema["components"].setdefault("securitySchemes", {})
     schema["components"]["securitySchemes"]["x402"] = {
         "type": "http",
         "scheme": "x402"
     }
-
-    path = "/api/v1/telegram/send"
-    if path in schema.get("paths", {}):
-        for method in schema["paths"][path]:
-            schema["paths"][path][method]["security"] = [{"x402": []}]
-            schema["paths"][path][method]["x402"] = {
-                "price": 0.01,
-                "currency": "USDC"
-            }
-
+    
+    paid_path = "/api/v1/telegram/send"
+    
+    # استثناء الروابط المجانية صراحةً لمنع فحصها مالياً من قبل الأداة
+    for path in schema.get("paths", {}):
+        if path == paid_path:
+            for method in schema["paths"][path]:
+                schema["paths"][path][method]["security"] = [{"x402": []}]
+                schema["paths"][path][method]["x402"] = {
+                    "price": 0.01,
+                    "currency": "USDC"
+                }
+        else:
+            for method in schema["paths"][path]:
+                schema["paths"][path][method]["security"] = []
+                
     return JSONResponse(schema)
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -345,24 +284,23 @@ async def openapi_root():
     return await openapi()
 
 # ============================================
-# 12. الصفحات والروابط الفرعية المطلوبة للفحص
+# 12. الصفحات والأيقونات المطلوبة للفحص
 # ============================================
 
-@app.api_route("/terms", methods=["GET", "HEAD"])
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    # رد فارغ وسريع لمنع أخطاء الـ الفحص على الأيقونة
+    return JSONResponse(status_code=200, content={})
+
+@app.get("/terms")
 async def terms_page():
     return {"message": "Terms of Service for TelAgent"}
 
-@app.api_route("/privacy-short", methods=["GET", "HEAD"])
+@app.get("/privacy-short")
 async def privacy_page():
     return {"message": "Privacy Policy Summary for TelAgent"}
 
-@app.options("/{full_path:path}", include_in_schema=False)
-async def catch_all_options(full_path: str):
-    # يمنع رد 405 على طلبات OPTIONS الاستكشافية التي قد ترسلها أدوات
-    # الفحص (x402scan / mppscan) على أي مسار غير معرّف صراحة
-    return JSONResponse(status_code=200, content={"ok": True})
-
-@app.api_route("/home", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.get("/home", response_class=HTMLResponse)
 async def home_ui():
     return """
     <!DOCTYPE html>
