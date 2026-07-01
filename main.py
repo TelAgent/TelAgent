@@ -72,7 +72,15 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. تعريف OpenAPI المخصص (CUSTOM_OPENAPI)
+# 5. دعم OPTIONS و HEAD لجميع المسارات (لتجنب 405)
+# ============================================
+
+@app.api_route("/{path:path}", methods=["OPTIONS", "HEAD"])
+async def catch_all_options_and_head(path: str):
+    return JSONResponse(status_code=200, content={"ok": True})
+
+# ============================================
+# 6. تعريف OpenAPI المخصص (CUSTOM_OPENAPI)
 # ============================================
 
 CUSTOM_OPENAPI = {
@@ -180,13 +188,13 @@ CUSTOM_OPENAPI = {
 }
 
 # ============================================
-# 6. تعيين OpenAPI المخصص
+# 7. تعيين OpenAPI المخصص
 # ============================================
 
 app.openapi_schema = CUSTOM_OPENAPI
 
 # ============================================
-# 7. نقطة نهاية OpenAPI (للتأكيد)
+# 8. نقطة نهاية OpenAPI (للتأكيد)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -198,7 +206,7 @@ async def well_known_openapi():
     return JSONResponse(CUSTOM_OPENAPI)
 
 # ============================================
-# 8. دالة توليد رد 402
+# 9. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -230,7 +238,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 9. نقاط النهاية المجانية
+# 10. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -250,7 +258,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 10. تسجيل العميل (مجاني)
+# 11. تسجيل العميل (مجاني)
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -271,7 +279,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 11. نقطة الدفع الرئيسية
+# 12. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -332,7 +340,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 12. Discovery (x402)
+# 13. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -359,7 +367,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 13. التشغيل
+# 14. التشغيل
 # ============================================
 
 if __name__ == "__main__":
