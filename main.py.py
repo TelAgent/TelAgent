@@ -180,7 +180,13 @@ CUSTOM_OPENAPI = {
 }
 
 # ============================================
-# 6. دالة توليد رد 402
+# 6. تعيين OpenAPI المخصص (هذا هو المفتاح!)
+# ============================================
+
+app.openapi_schema = CUSTOM_OPENAPI
+
+# ============================================
+# 7. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -212,7 +218,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 7. نقاط النهاية المجانية
+# 8. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -232,7 +238,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 8. تسجيل العميل (مجاني)
+# 9. تسجيل العميل (مجاني)
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -253,7 +259,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 9. نقطة الدفع الرئيسية
+# 10. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -314,7 +320,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 10. Discovery (x402)
+# 11. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -341,7 +347,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 11. OpenAPI (يعيد CUSTOM_OPENAPI)
+# 12. نقاط نهاية OpenAPI (تعيد المخصص)
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -353,7 +359,7 @@ async def well_known_openapi():
     return JSONResponse(CUSTOM_OPENAPI)
 
 # ============================================
-# 12. التشغيل
+# 13. التشغيل
 # ============================================
 
 if __name__ == "__main__":
