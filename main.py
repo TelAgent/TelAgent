@@ -345,6 +345,13 @@ async def x402_discovery():
 @app.get("/.well-known/openapi.json", include_in_schema=False)
 async def openapi():
     schema = app.openapi()
+    schema.setdefault("info", {})
+    schema["info"]["x-guidance"] = (
+        "To send a Telegram message, POST to /api/v1/telegram/send with "
+        "{to, message, agent_wallet} as JSON. Unauthenticated requests receive "
+        "a 402 x402 payment challenge (0.01 USDC on Solana). After paying, "
+        "resend the request with a valid PAYMENT-SIGNATURE header."
+    )
 
     schema.setdefault("components", {})
     schema["components"].setdefault("securitySchemes", {})
@@ -381,6 +388,26 @@ async def openapi():
                         }
                     }
                 }
+                # نضيف مخطط requestBody يدوياً لعملية POST — لأن الفحص
+                # اليدوي للـ body (بدل الاعتماد على نموذج Pydantic كمعامل)
+                # أدى إلى فقدان FastAPI القدرة على توليده تلقائياً.
+                if method.lower() == "post":
+                    operation["requestBody"] = {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "to": {"type": "string", "description": "Telegram chat ID"},
+                                        "message": {"type": "string", "description": "Message text"},
+                                        "agent_wallet": {"type": "string", "description": "Payer wallet address"}
+                                    },
+                                    "required": ["to", "message", "agent_wallet"]
+                                }
+                            }
+                        }
+                    }
             else:
                 # كل الطرق/المسارات الأخرى مجانية صراحة — هذا ضروري كي لا
                 # تحاول أدوات الفحص (x402scan) اختبارها كموارد مدفوعة
