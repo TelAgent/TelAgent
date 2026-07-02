@@ -304,8 +304,14 @@ async def register_agent(body: RegisterAgentRequest):
 
 @app.api_route("/.well-known/x402", methods=["GET", "HEAD"])
 async def x402_discovery():
+    paid_resource_url = f"{SERVICE_URL}/api/v1/telegram/send"
     return {
-        "version": "1.0",
+        # الشكل الأساسي المطلوب رسمياً حسب docs/DISCOVERY.md لـ x402scan:
+        # "version" رقم صحيح، و"resources" مصفوفة من روابط كاملة (نصوص)
+        "version": 1,
+        "resources": [paid_resource_url],
+
+        # حقول إضافية معلوماتية (لا تتعارض مع المواصفة، ولأدوات أخرى)
         "identifier": "telagent",
         "name": "TelAgent",
         "description": "Telegram API for AI Agents with x402 payments",
@@ -313,10 +319,9 @@ async def x402_discovery():
             "name": "TelAgent",
             "website": "https://telagent.dev"
         },
-        # تم تصحيح الرابط: يجب أن يشير إلى رابط النشر الفعلي على Render
         "servers": [{"url": SERVICE_URL}],
-        "resources": [{
-            "resource": f"{SERVICE_URL}/api/v1/telegram/send",
+        "resources_detail": [{
+            "resource": paid_resource_url,
             "path": "/api/v1/telegram/send",
             "method": "POST",
             "scheme": "exact",
@@ -353,9 +358,25 @@ async def openapi():
         for method, operation in methods.items():
             if path == paid_path and method.lower() in paid_methods:
                 operation["security"] = [{"x402": []}]
-                operation["x402"] = {
-                    "price": 0.01,
-                    "currency": "USDC"
+                # حسب مواصفات x402scan الرسمية (docs/DISCOVERY.md):
+                # كل عملية مدفوعة يجب أن تعلن x-payment-info وأن يظهر
+                # رد 402 صراحة ضمن responses — وهذا ما كان ناقصاً سابقاً.
+                operation["x-payment-info"] = {
+                    "protocols": ["x402"],
+                    "price": {
+                        "mode": "fixed",
+                        "currency": "USD",
+                        "amount": "0.01"
+                    }
+                }
+                operation.setdefault("responses", {})
+                operation["responses"]["402"] = {
+                    "description": "Payment Required — x402 challenge",
+                    "content": {
+                        "application/json": {
+                            "schema": {"type": "object"}
+                        }
+                    }
                 }
             else:
                 # كل الطرق/المسارات الأخرى مجانية صراحة — هذا ضروري كي لا
