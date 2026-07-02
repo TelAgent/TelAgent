@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, Response
+from fastapi.openapi.docs import get_swagger_ui_html
 from pydantic import BaseModel
 import os
 import json
@@ -67,7 +68,13 @@ app = FastAPI(
         "email": "legal@telagent.dev",
         "url": "https://telagent.dev"
     },
-    lifespan=lifespan
+    lifespan=lifespan,
+    # نعطّل مسار /openapi.json المُولَّد تلقائياً من FastAPI، لأنه كان
+    # يتطابق قبل مسارنا المخصص (الذي يضيف حقول "security") ويمنعه من
+    # التنفيذ فعلياً — كل تعديلاتنا على security كانت بلا أثر بسببه.
+    openapi_url=None,
+    docs_url=None,
+    redoc_url=None
 )
 
 app.add_middleware(
@@ -360,6 +367,10 @@ async def openapi():
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi_root():
     return await openapi()
+
+@app.get("/docs", include_in_schema=False)
+async def custom_docs():
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="TelAgent API — Docs")
 
 # ============================================
 # مسار تصحيح مؤقت — لعرض محتوى رد الدفع 402 بحالة 200 للفحص فقط.
