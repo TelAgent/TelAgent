@@ -96,63 +96,66 @@ FAVICON_BASE64 = "AAABAAIAEBAAAAAAIAAHAwAAJgAAACAgAAAAACAARwEAAC0DAACJUE5HDQoaCg
 
 def get_x402_payment_response(resource_path: str, description: str = "0.01 USDC per message"):
     """
-    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2)،
-    متضمنًا امتداد Bazaar للاكتشاف (extensions.bazaar.info) الذي يصف
-    شكل الطلب (input) والاستجابة (output) — وهو مطلوب لعدّ المورد
-    "صالحًا" لدى بعض أدوات الفهرسة، وليس كافياً أن يكون extensions فارغًا.
+    توليد رد 402 المطابق لمواصفات بروتوكول x402 الإصدار 2 (v2).
+    نرسل بيانات التحدي عبر مسارين معاً:
+      1. ترويسة "Payment-Required" — وهي وسيلة النقل الأساسية لـ v2
+         حسب مواصفة x402scan (docs/DISCOVERY.md).
+      2. جسم الرد (body) — كخيار احتياطي للتوافق مع العملاء الأقدم.
     """
     resource_url = f"{SERVICE_URL}{resource_path}"
-    return JSONResponse(
-        status_code=402,
-        content={
-            "x402Version": 2,
-            "error": "PAYMENT-SIGNATURE header is required",
-            "resource": {
-                "url": resource_url,
-                "description": description,
-                "mimeType": "application/json"
-            },
-            "accepts": [{
-                "scheme": "exact",
-                "network": SOLANA_MAINNET_CAIP2,
-                "amount": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
-                "asset": USDC_MINT_SOLANA,
-                "payTo": PAYMENT_RECIPIENT,
-                "maxTimeoutSeconds": 60,
-                "extra": {
-                    "name": "USD Coin",
-                    "version": "2"
-                }
-            }],
-            "extensions": {
-                "bazaar": {
-                    "info": {
-                        "input": {
-                            "type": "http",
-                            "method": "POST",
-                            "bodySchema": {
-                                "type": "object",
-                                "properties": {
-                                    "to": {"type": "string", "description": "Telegram chat ID"},
-                                    "message": {"type": "string", "description": "Message text"},
-                                    "agent_wallet": {"type": "string", "description": "Payer wallet address"}
-                                },
-                                "required": ["to", "message", "agent_wallet"]
-                            }
-                        },
-                        "output": {
-                            "type": "json",
-                            "example": {
-                                "success": True,
-                                "message_id": 123456,
-                                "payment_verified": True,
-                                "cost": "0.01 USDC"
-                            }
+    payload = {
+        "x402Version": 2,
+        "error": "PAYMENT-SIGNATURE header is required",
+        "resource": {
+            "url": resource_url,
+            "description": description,
+            "mimeType": "application/json"
+        },
+        "accepts": [{
+            "scheme": "exact",
+            "network": SOLANA_MAINNET_CAIP2,
+            "amount": "10000",  # 0.01 USDC بوحدات ذرية (6 خانات عشرية)
+            "asset": USDC_MINT_SOLANA,
+            "payTo": PAYMENT_RECIPIENT,
+            "maxTimeoutSeconds": 60,
+            "extra": {
+                "name": "USD Coin",
+                "version": "2"
+            }
+        }],
+        "extensions": {
+            "bazaar": {
+                "info": {
+                    "input": {
+                        "type": "http",
+                        "method": "POST",
+                        "bodySchema": {
+                            "type": "object",
+                            "properties": {
+                                "to": {"type": "string", "description": "Telegram chat ID"},
+                                "message": {"type": "string", "description": "Message text"},
+                                "agent_wallet": {"type": "string", "description": "Payer wallet address"}
+                            },
+                            "required": ["to", "message", "agent_wallet"]
+                        }
+                    },
+                    "output": {
+                        "type": "json",
+                        "example": {
+                            "success": True,
+                            "message_id": 123456,
+                            "payment_verified": True,
+                            "cost": "0.01 USDC"
                         }
                     }
                 }
             }
         }
+    }
+    return JSONResponse(
+        status_code=402,
+        content=payload,
+        headers={"Payment-Required": json.dumps(payload, separators=(",", ":"))}
     )
 
 # ============================================
