@@ -338,14 +338,22 @@ async def openapi():
         "scheme": "x402"
     }
 
-    path = "/api/v1/telegram/send"
-    if path in schema.get("paths", {}):
-        for method in schema["paths"][path]:
-            schema["paths"][path][method]["security"] = [{"x402": []}]
-            schema["paths"][path][method]["x402"] = {
-                "price": 0.01,
-                "currency": "USDC"
-            }
+    paid_path = "/api/v1/telegram/send"
+    # الطرق (methods) التي تفرض فعلياً رد 402 عند غياب الدفع في كودنا
+    paid_methods = {"get", "post", "head"}
+
+    for path, methods in schema.get("paths", {}).items():
+        for method, operation in methods.items():
+            if path == paid_path and method.lower() in paid_methods:
+                operation["security"] = [{"x402": []}]
+                operation["x402"] = {
+                    "price": 0.01,
+                    "currency": "USDC"
+                }
+            else:
+                # كل الطرق/المسارات الأخرى مجانية صراحة — هذا ضروري كي لا
+                # تحاول أدوات الفحص (x402scan) اختبارها كموارد مدفوعة
+                operation["security"] = []
 
     return JSONResponse(schema)
 
