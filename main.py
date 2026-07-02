@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from pydantic import BaseModel
 import os
 import json
@@ -72,7 +72,28 @@ app.add_middleware(
 )
 
 # ============================================
-# 5. دعم OPTIONS و HEAD لجميع المسارات
+# 5. Favicon (أيقونة الموقع)
+# ============================================
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    svg = """
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect width="100" height="100" rx="20" fill="url(#g)"/>
+        <path d="M35 30H65V40H52V75H48V40H35V30Z" fill="white" opacity="0.95"/>
+        <defs>
+            <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#4f46e5"/>
+                <stop offset="50%" stop-color="#7c3aed"/>
+                <stop offset="100%" stop-color="#a78bfa"/>
+            </linearGradient>
+        </defs>
+    </svg>
+    """
+    return Response(content=svg, media_type="image/svg+xml")
+
+# ============================================
+# 6. دعم OPTIONS و HEAD لجميع المسارات
 # ============================================
 
 @app.api_route("/{path:path}", methods=["OPTIONS", "HEAD"])
@@ -80,7 +101,7 @@ async def catch_all_options_and_head(path: str):
     return JSONResponse(status_code=200, content={"ok": True})
 
 # ============================================
-# 6. تعريف OpenAPI المخصص (CUSTOM_OPENAPI)
+# 7. تعريف OpenAPI المخصص (CUSTOM_OPENAPI)
 # ============================================
 
 CUSTOM_OPENAPI = {
@@ -188,13 +209,13 @@ CUSTOM_OPENAPI = {
 }
 
 # ============================================
-# 7. تعيين OpenAPI المخصص
+# 8. تعيين OpenAPI المخصص
 # ============================================
 
 app.openapi_schema = CUSTOM_OPENAPI
 
 # ============================================
-# 8. نقطة نهاية OpenAPI (للتأكيد)
+# 9. نقاط نهاية OpenAPI
 # ============================================
 
 @app.get("/openapi.json", include_in_schema=False)
@@ -206,7 +227,7 @@ async def well_known_openapi():
     return JSONResponse(CUSTOM_OPENAPI)
 
 # ============================================
-# 9. دالة توليد رد 402
+# 10. دالة توليد رد 402
 # ============================================
 
 def get_x402_payment_response():
@@ -238,7 +259,7 @@ def get_x402_payment_response():
     )
 
 # ============================================
-# 10. نقاط النهاية المجانية
+# 11. نقاط النهاية المجانية
 # ============================================
 
 @app.get("/")
@@ -258,7 +279,7 @@ async def privacy():
     return {"message": "Privacy Policy"}
 
 # ============================================
-# 11. تسجيل العميل (مجاني)
+# 12. تسجيل العميل (مجاني)
 # ============================================
 
 class RegisterAgentRequest(BaseModel):
@@ -279,7 +300,7 @@ async def register_agent(body: RegisterAgentRequest):
     return {"success": True, "wallet": body.wallet, "consent": True}
 
 # ============================================
-# 12. نقطة الدفع الرئيسية
+# 13. نقطة الدفع الرئيسية
 # ============================================
 
 class TelegramRequest(BaseModel):
@@ -340,7 +361,7 @@ async def telegram_send(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ============================================
-# 13. Discovery (x402)
+# 14. Discovery (x402)
 # ============================================
 
 @app.get("/.well-known/x402")
@@ -367,7 +388,7 @@ async def x402_discovery():
     }
 
 # ============================================
-# 14. التشغيل
+# 15. التشغيل
 # ============================================
 
 if __name__ == "__main__":
